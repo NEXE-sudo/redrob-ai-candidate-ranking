@@ -74,3 +74,48 @@ class BM25Retriever:
         similarity_scores = [float(scores[i]) for i in top_indices]
         
         return candidate_ids, similarity_scores
+
+class EmbeddingRetriever:
+    """FAISS-based embedding retrieval for candidates"""
+    
+    def __init__(self, model_name: str = 'BAAI/bge-small-en-v1.5'):
+        from sentence_transformers import SentenceTransformer
+        self.model = SentenceTransformer(model_name, device='cpu')
+        self.candidate_embeddings = None
+        self.candidate_ids = None
+        
+    def build_index(self, candidates: List[dict]) -> Tuple[np.ndarray, List[str]]:
+        self.candidate_ids = [c['candidate_id'] for c in candidates]
+        texts = []
+        for candidate in candidates:
+            text_parts = []
+            profile = candidate.get('profile', {})
+            text_parts.append(profile.get('summary', ''))
+            text_parts.append(profile.get('headline', ''))
+            text_parts.append(profile.get('current_title', ''))
+            skills = candidate.get('skills', [])
+            text_parts.append(' '.join([s['name'] for s in skills[:20]]))
+            career = candidate.get('career_history', [])
+            for role in career[:2]:
+                text_parts.append(role.get('title', ''))
+                text_parts.append(role.get('description', ''))
+            combined_text = ' '.join([t for t in text_parts if t])
+            texts.append(combined_text[:1000])
+            
+        embeddings = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+        self.candidate_embeddings = embeddings / (np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8)
+        return self.candidate_embeddings, self.candidate_ids
+
+    def retrieve(self, query_text: str, top_k: int = 500) -> Tuple[List[str], List[float]]:
+        if self.candidate_embeddings is None:
+            raise ValueError("Index not built.")
+            
+        query_embedding = self.model.encode([query_text], convert_to_numpy=True, show_progress_bar=False)[0]
+        query_embedding = query_embedding / (np.linalg.norm(query_embedding) + 1e-8)
+        
+        similarities = np.dot(self.candidate_embeddings, query_embedding.T).flatten()
+        top_indices = np.argsort(similarities)[-top_k:][::-1]
+        
+        retrieved_ids = [self.candidate_ids[i] for i in top_indices]
+        retrieved_scores = [float(similarities[i]) for i in top_indices]
+        return retrieved_ids, retrieved_scores

@@ -65,28 +65,24 @@ class OptimizedRankingEngine:
         self.jd_text = jd
     
     def _load_or_build_faiss_index(self):
-        """Load precomputed embeddings or build FAISS index"""
+        """Load precomputed embeddings or prepare for dynamic pool encoding"""
+        
+        self.candidate_ids = [c['candidate_id'] for c in self.candidates]
         
         if self.use_precomputed:
             try:
                 print("Loading precomputed embeddings...")
-                self.candidate_embeddings, self.candidate_ids, metadata = \
+                self.candidate_embeddings, _, metadata = \
                     self.precomputer.load_precomputed_embeddings()
                 
-                print(f"Building FAISS index from precomputed embeddings...")
-                self.faiss_index = faiss.IndexFlatIP(metadata['embedding_dim'])
-                self.faiss_index.add(self.candidate_embeddings)
-                print(f"FAISS index ready ({self.faiss_index.ntotal} vectors)")
+                print(f"Precomputed embeddings ready.")
                 return
                 
             except FileNotFoundError:
-                print("Precomputed embeddings not found. Building now...")
+                print("Precomputed embeddings not found. Will compute dynamically for BM25 pool.")
         
-        # Fallback: compute embeddings on the fly
-        raise RuntimeError(
-            "Precomputed embeddings required for fast ranking. "
-            "Run: python3 precompute_embeddings.py <candidates_file>"
-        )
+        self.precomputer.load_model()
+        self.candidate_embeddings = None
     
     def rank_candidates_fast(
         self,
@@ -248,7 +244,9 @@ class OptimizedRankingEngine:
         """Retrieve top-k from a specific pool using FAISS"""
         
         # Embed query
-        self.precomputer.load_model()
+        if self.precomputer.model is None:
+            self.precomputer.load_model()
+            
         query_embedding = self.precomputer.model.encode(
             [query_text],
             convert_to_numpy=True,
@@ -268,8 +266,38 @@ class OptimizedRankingEngine:
             except ValueError:
                 continue
         
-        # Compute similarities for pool
-        pool_embeddings = self.candidate_embeddings[pool_indices].astype('float32')
+        if self.candidate_embeddings is not None:
+            # Compute similarities for pool using precomputed embeddings
+            pool_embeddings = self.candidate_embeddings[pool_indices].astype('float32')
+        else:
+            # Dynamically compute embeddings for the pool
+            print(f"  Computing embeddings dynamically for {len(pool_ids)} candidates...")
+            pool_texts = []
+            for pool_id in pool_ids:
+                candidate = next(c for c in self.candidates if c['candidate_id'] == pool_id)
+                text_parts = []
+                profile = candidate.get('profile', {})
+                text_parts.append(profile.get('summary', ''))
+                text_parts.append(profile.get('headline', ''))
+                text_parts.append(profile.get('current_title', ''))
+                skills = candidate.get('skills', [])
+                text_parts.append(', '.join([s['name'] for s in skills[:20]]))
+                career = candidate.get('career_history', [])
+                for role in career[:2]:
+                    text_parts.append(role.get('title', ''))
+                    text_parts.append(role.get('description', ''))
+                combined_text = ' '.join([t for t in text_parts if t])
+                pool_texts.append(combined_text[:1000])
+                
+            pool_embeddings = self.precomputer.model.encode(
+                pool_texts,
+                batch_size=64,
+                convert_to_numpy=True,
+                show_progress_bar=False
+            )
+            pool_embeddings = pool_embeddings / (np.linalg.norm(pool_embeddings, axis=1, keepdims=True) + 1e-8)
+            pool_embeddings = pool_embeddings.astype('float32')
+
         similarities = np.dot(pool_embeddings, query_embedding.T).flatten()
         
         # Get top-k
