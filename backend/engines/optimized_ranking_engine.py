@@ -6,7 +6,7 @@ Uses precomputed embeddings for speed.
 
 import json
 import numpy as np
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
 import os
 import faiss
@@ -33,26 +33,34 @@ class OptimizedRankingEngine:
         self.precomputer = EmbeddingPrecomputer(cache_dir=embeddings_cache_dir)
         
         self.embeddings_cache_dir = embeddings_cache_dir
+        self.faiss_index_path = os.path.join(embeddings_cache_dir, 'precomputed_embeddings_faiss.index')
         self.use_precomputed = use_precomputed_embeddings
         
-        self.candidates = None
+        self.candidates = []
+        self.candidates_by_id = {}
+        self.candidate_id_to_index = {}
         self.parsed_profiles = {}
         self.faiss_index = None
         self.candidate_embeddings = None
-        self.candidate_ids = None
+        self.candidate_ids = []
         self.jd_text = None
         self.jd_embedding = None
+        self.candidates_jsonl_path = None
     
     def load_candidates(self, jsonl_path: str):
         """Load candidates from JSONL"""
         print(f"Loading candidates from {jsonl_path}...")
         
+        self.candidates_jsonl_path = jsonl_path
         self.candidates = []
+        self.candidates_by_id = {}
+        
         with open(jsonl_path, 'r') as f:
             for line_num, line in enumerate(f):
                 try:
                     candidate = json.loads(line)
                     self.candidates.append(candidate)
+                    self.candidates_by_id[candidate['candidate_id']] = candidate
                 except json.JSONDecodeError as e:
                     if line_num < 10:  # Only warn for first 10
                         print(f"Warning: Failed to parse line {line_num}: {e}")
@@ -65,24 +73,99 @@ class OptimizedRankingEngine:
         self.jd_text = jd
     
     def _load_or_build_faiss_index(self):
-        """Load precomputed embeddings or prepare for dynamic pool encoding"""
-        
+        """Load cached embeddings and FAISS index, or build them once."""
         self.candidate_ids = [c['candidate_id'] for c in self.candidates]
-        
+
         if self.use_precomputed:
             try:
                 print("Loading precomputed embeddings...")
-                self.candidate_embeddings, _, metadata = \
+                self.candidate_embeddings, self.candidate_ids, metadata = \
                     self.precomputer.load_precomputed_embeddings()
-                
-                print(f"Precomputed embeddings ready.")
+                self.candidate_embeddings = self.candidate_embeddings.astype('float32', copy=False)
+                self.candidate_id_to_index = {
+                    cid: idx for idx, cid in enumerate(self.candidate_ids)
+                }
+                print("Precomputed embeddings ready.")
+
+                if os.path.exists(self.faiss_index_path):
+                    print(f"Loading persisted FAISS index from {self.faiss_index_path}...")
+                    self.faiss_index = self.precomputer.load_faiss_index(self.faiss_index_path)
+                    print("FAISS index loaded.")
+                else:
+                    print("Persisted FAISS index not found. Building index once...")
+                    self.faiss_index = self.precomputer.build_faiss_index(
+                        self.candidate_embeddings,
+                        output_path=self.faiss_index_path
+                    )
+                    print(f"Saved FAISS index: {self.faiss_index_path}")
+
                 return
-                
+
             except FileNotFoundError:
-                print("Precomputed embeddings not found. Will compute dynamically for BM25 pool.")
-        
+                print("Precomputed embeddings not found.")
+                if self.candidates_jsonl_path:
+                    print("Generating embeddings cache once for all candidates...")
+                    self.precomputer.precompute_embeddings(
+                        jsonl_path=self.candidates_jsonl_path,
+                        output_prefix='precomputed_embeddings',
+                        batch_size=64
+                    )
+                    self.candidate_embeddings, self.candidate_ids, metadata = \
+                        self.precomputer.load_precomputed_embeddings()
+                    self.candidate_embeddings = self.candidate_embeddings.astype('float32', copy=False)
+                    self.candidate_id_to_index = {
+                        cid: idx for idx, cid in enumerate(self.candidate_ids)
+                    }
+                    self.faiss_index = self.precomputer.load_faiss_index(self.faiss_index_path)
+                    return
+                else:
+                    print("No JSONL path available. Will compute embeddings once in memory.")
+
+        # If precomputed embeddings are not being used, build model and compute once.
         self.precomputer.load_model()
-        self.candidate_embeddings = None
+        if self.candidate_embeddings is None:
+            print("Computing all candidate embeddings once in memory...")
+            candidate_texts = []
+            for candidate in self.candidates:
+                text_parts = []
+                profile = candidate.get('profile', {})
+                text_parts.append(profile.get('summary', ''))
+                text_parts.append(profile.get('headline', ''))
+                text_parts.append(profile.get('current_title', ''))
+                skills = candidate.get('skills', [])
+                text_parts.append(', '.join([s['name'] for s in skills[:20]]))
+                career = candidate.get('career_history', [])
+                for role in career[:2]:
+                    text_parts.append(role.get('title', ''))
+                    text_parts.append(role.get('description', ''))
+                combined_text = ' '.join([t for t in text_parts if t])
+                candidate_texts.append(combined_text[:1000])
+
+            embeddings = self.precomputer.model.encode(
+                candidate_texts,
+                batch_size=64,
+                convert_to_numpy=True,
+                show_progress_bar=False
+            )
+            self.candidate_embeddings = embeddings / (
+                np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8
+            )
+            self.candidate_embeddings = self.candidate_embeddings.astype('float32', copy=False)
+            self.candidate_id_to_index = {
+                cid: idx for idx, cid in enumerate(self.candidate_ids)
+            }
+
+            if os.path.exists(self.faiss_index_path):
+                print(f"Loading persisted FAISS index from {self.faiss_index_path}...")
+                self.faiss_index = self.precomputer.load_faiss_index(self.faiss_index_path)
+                print("FAISS index loaded.")
+            else:
+                print("Building and caching FAISS index...")
+                self.faiss_index = self.precomputer.build_faiss_index(
+                    self.candidate_embeddings,
+                    output_path=self.faiss_index_path
+                )
+                print(f"Saved FAISS index: {self.faiss_index_path}")
     
     def rank_candidates_fast(
         self,
@@ -156,11 +239,8 @@ class OptimizedRankingEngine:
                 elapsed = (datetime.now() - t0).total_seconds()
                 print(f"  Scoring {i}/{len(faiss_ids)} ({elapsed:.1f}s)...")
             
-            # Find candidate
-            candidate = next(
-                (c for c in self.candidates if c['candidate_id'] == candidate_id),
-                None
-            )
+            # Lookup candidate by ID rather than scanning the full list
+            candidate = self.candidates_by_id.get(candidate_id)
             if not candidate:
                 continue
             
@@ -208,6 +288,11 @@ class OptimizedRankingEngine:
         
         results = []
         for rank, scored in enumerate(top_candidates, 1):
+            reasoning_text = self._generate_reasoning(
+                scored['candidate_data'],
+                scored['parsed_profile'],
+                scored['components']
+            )
             result = {
                 'rank': rank,
                 'candidate_id': scored['candidate_id'],
@@ -221,7 +306,8 @@ class OptimizedRankingEngine:
                     'evaluation_framework_score': float(scored['components'].evaluation_framework_score),
                     'product_mindset_score': float(scored['components'].product_mindset_score),
                     'semantic_similarity': float(scored['components'].semantic_similarity)
-                }
+                },
+                'reasoning': reasoning_text
             }
             results.append(result)
         
@@ -241,73 +327,85 @@ class OptimizedRankingEngine:
         pool_ids: List[str],
         top_k: int = 500
     ) -> Tuple[List[str], List[float]]:
-        """Retrieve top-k from a specific pool using FAISS"""
-        
-        # Embed query
+        """Retrieve top-k from a specific pool using precomputed candidate embeddings."""
+
         if self.precomputer.model is None:
             self.precomputer.load_model()
-            
+
         query_embedding = self.precomputer.model.encode(
             [query_text],
             convert_to_numpy=True,
             show_progress_bar=False
         )[0]
-        
-        # Normalize
+
         query_embedding = query_embedding / (np.linalg.norm(query_embedding) + 1e-8)
         query_embedding = query_embedding.reshape(1, -1).astype('float32')
-        
-        # Get indices in full index for pool IDs
-        pool_indices = []
-        for pool_id in pool_ids:
-            try:
-                idx = self.candidate_ids.index(pool_id)
-                pool_indices.append(idx)
-            except ValueError:
-                continue
-        
-        if self.candidate_embeddings is not None:
-            # Compute similarities for pool using precomputed embeddings
-            pool_embeddings = self.candidate_embeddings[pool_indices].astype('float32')
-        else:
-            # Dynamically compute embeddings for the pool
-            print(f"  Computing embeddings dynamically for {len(pool_ids)} candidates...")
-            pool_texts = []
-            for pool_id in pool_ids:
-                candidate = next(c for c in self.candidates if c['candidate_id'] == pool_id)
-                text_parts = []
-                profile = candidate.get('profile', {})
-                text_parts.append(profile.get('summary', ''))
-                text_parts.append(profile.get('headline', ''))
-                text_parts.append(profile.get('current_title', ''))
-                skills = candidate.get('skills', [])
-                text_parts.append(', '.join([s['name'] for s in skills[:20]]))
-                career = candidate.get('career_history', [])
-                for role in career[:2]:
-                    text_parts.append(role.get('title', ''))
-                    text_parts.append(role.get('description', ''))
-                combined_text = ' '.join([t for t in text_parts if t])
-                pool_texts.append(combined_text[:1000])
-                
-            pool_embeddings = self.precomputer.model.encode(
-                pool_texts,
-                batch_size=64,
-                convert_to_numpy=True,
-                show_progress_bar=False
-            )
-            pool_embeddings = pool_embeddings / (np.linalg.norm(pool_embeddings, axis=1, keepdims=True) + 1e-8)
-            pool_embeddings = pool_embeddings.astype('float32')
 
+        pool_indices = [
+            self.candidate_id_to_index[pool_id]
+            for pool_id in pool_ids
+            if pool_id in self.candidate_id_to_index
+        ]
+
+        if not pool_indices:
+            return [], []
+
+        if self.candidate_embeddings is None:
+            raise ValueError("Candidate embeddings are required for FAISS retrieval.")
+
+        pool_embeddings = self.candidate_embeddings[pool_indices]
         similarities = np.dot(pool_embeddings, query_embedding.T).flatten()
-        
-        # Get top-k
+
         top_indices_in_pool = np.argsort(similarities)[-top_k:][::-1]
-        
         retrieved_ids = [pool_ids[i] for i in top_indices_in_pool]
         retrieved_scores = [float(similarities[i]) for i in top_indices_in_pool]
-        
         return retrieved_ids, retrieved_scores
-    
+
+    def _generate_reasoning(
+        self,
+        candidate_raw: Dict[str, Any],
+        parsed_profile: ParsedProfile,
+        components: ScoringComponents
+    ) -> str:
+        """Generate a factual, candidate-specific reasoning sentence for final output."""
+        profile = candidate_raw.get('profile', {})
+        skills = [s.get('name', '').strip() for s in candidate_raw.get('skills', []) if s.get('name')]
+        top_skills = ', '.join(skills[:3]) if skills else ''
+        company = parsed_profile.current_company or parsed_profile.most_recent_role_company or 'current company'
+        title = parsed_profile.current_title or parsed_profile.most_recent_role_title or 'candidate'
+
+        signals = []
+        if top_skills:
+            signals.append(f"skills in {top_skills}")
+        if components.production_experience >= 0.8:
+            signals.append("strong production deployment and scale experience")
+        elif components.production_experience >= 0.5:
+            signals.append("solid production experience")
+
+        if components.technical_relevance >= 0.8:
+            signals.append("technical relevance for embeddings and retrieval")
+        elif components.technical_relevance >= 0.6:
+            signals.append("good technical match to the JD")
+
+        if components.semantic_similarity >= 0.8:
+            signals.append("high semantic fit to the job description")
+
+        if profile.get('current_title') and parsed_profile.years_experience:
+            first_sentence = (
+                f"{title} at {company} with {parsed_profile.years_experience:.0f} years of experience"
+            )
+        else:
+            first_sentence = f"{title} from {company} has strong candidate signals"
+
+        if signals:
+            second_sentence = ' '.join(signals).capitalize() + '.'
+        else:
+            second_sentence = (
+                "Strong candidate profile and recruiter signals make this profile a top ranked match."
+            )
+
+        return f"{first_sentence}. {second_sentence}"
+
     def save_results(self, results: List[Dict], output_dir: str = './ranking_output'):
         """Save ranking results to CSV and JSON"""
         
@@ -321,10 +419,11 @@ class OptimizedRankingEngine:
             csv_data.append({
                 'candidate_id': result['candidate_id'],
                 'rank': result['rank'],
-                'score': f"{result['final_score']:.4f}"
+                'score': f"{result['final_score']:.4f}",
+                'reasoning': result.get('reasoning', '')
             })
         
-        csv_df = pd.DataFrame(csv_data)
+        csv_df = pd.DataFrame(csv_data, columns=['candidate_id', 'rank', 'score', 'reasoning'])
         csv_path = os.path.join(output_dir, 'submission.csv')
         csv_df.to_csv(csv_path, index=False)
         print(f"Saved CSV: {csv_path}")

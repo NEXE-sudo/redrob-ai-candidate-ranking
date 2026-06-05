@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import datetime
 from sentence_transformers import SentenceTransformer
 import pickle
+import faiss
 
 
 class EmbeddingPrecomputer:
@@ -152,12 +153,17 @@ class EmbeddingPrecomputer:
             'num_batches': len(all_embeddings)
         }
         
+        faiss_index_path = os.path.join(self.cache_dir, f'{output_prefix}_faiss.index')
+        self.build_faiss_index(embeddings_array, output_path=faiss_index_path)
+        metadata['faiss_index_file'] = faiss_index_path
+
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
         
         print(f"\nEmbeddings cached:")
         print(f"  Embeddings: {embeddings_path}")
         print(f"  IDs: {ids_path}")
+        print(f"  FAISS index: {faiss_index_path}")
         print(f"  Metadata: {metadata_path}")
         
         return metadata
@@ -187,6 +193,27 @@ class EmbeddingPrecomputer:
         print(f"Embedding dimension: {metadata['embedding_dim']}")
         
         return embeddings, candidate_ids, metadata
+
+    def build_faiss_index(self, embeddings: np.ndarray, output_path: str = None):
+        """Build and persist a FAISS inner-product index for embeddings."""
+        if output_path is None:
+            output_path = os.path.join(self.cache_dir, 'precomputed_embeddings_faiss.index')
+
+        embeddings = embeddings.astype('float32', copy=False)
+        index = faiss.IndexFlatIP(embeddings.shape[1])
+        index.add(embeddings)
+        faiss.write_index(index, output_path)
+        return output_path
+
+    def load_faiss_index(self, index_path: str = None):
+        """Load a persisted FAISS index from disk."""
+        if index_path is None:
+            index_path = os.path.join(self.cache_dir, 'precomputed_embeddings_faiss.index')
+
+        if not os.path.exists(index_path):
+            raise FileNotFoundError(f"FAISS index not found at '{index_path}'")
+
+        return faiss.read_index(index_path)
 
 
 def precompute_script(candidates_file: str):
