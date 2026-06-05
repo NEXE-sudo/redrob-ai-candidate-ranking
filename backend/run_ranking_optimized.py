@@ -13,9 +13,9 @@ from pathlib import Path
 from datetime import datetime
 
 # Add backend to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
-from app.engines.optimized_ranking_engine import OptimizedRankingEngine
+from engines.optimized_ranking_engine import OptimizedRankingEngine
 
 
 # Full Senior AI Engineer job description

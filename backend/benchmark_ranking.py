@@ -14,10 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from app.engines.candidate_profile_parser import CandidateProfileParser
-from app.engines.feature_scorer import FeatureScorer
-from app.engines.advanced_scorer import AdvancedScorer
-from app.engines.embedding_retrieval import BM25Retriever, EmbeddingRetriever
+from engines.candidate_profile_parser import CandidateProfileParser
+from engines.feature_scorer import FeatureScorer
+from engines.advanced_scorer import AdvancedScorer
+from engines.embedding_retrieval import BM25Retriever, EmbeddingRetriever
 
 
 class BenchmarkingEngine:

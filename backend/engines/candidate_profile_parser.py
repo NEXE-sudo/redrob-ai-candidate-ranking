@@ -4,7 +4,7 @@ Extracts structured information from raw candidate profiles for scoring.
 """
 
 import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 

@@ -10,9 +10,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "backend"))
 
-from app.engines.candidate_profile_parser import CandidateProfileParser
-from app.engines.feature_scorer import FeatureScorer
-from app.engines.embedding_retrieval import EmbeddingRetriever, BM25Retriever
+from engines.candidate_profile_parser import CandidateProfileParser
+from engines.feature_scorer import FeatureScorer
+from engines.embedding_retrieval import EmbeddingRetriever, BM25Retriever
 
 
 def load_sample_candidates(num_samples=10):
