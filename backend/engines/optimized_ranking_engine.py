@@ -5,7 +5,9 @@ Uses precomputed embeddings for speed.
 """
 
 import json
+import re
 import numpy as np
+from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
 import os
@@ -32,9 +34,15 @@ class OptimizedRankingEngine:
         self.bm25_retriever = BM25Retriever()
         self.precomputer = EmbeddingPrecomputer(cache_dir=embeddings_cache_dir)
         
-        self.embeddings_cache_dir = embeddings_cache_dir
-        self.faiss_index_path = os.path.join(embeddings_cache_dir, 'precomputed_embeddings_faiss.index')
+        self.embeddings_cache_dir = self.precomputer.cache_dir
+        self.faiss_index_path = self.embeddings_cache_dir / 'precomputed_embeddings_faiss.index'
         self.use_precomputed = use_precomputed_embeddings
+
+        print("\nOptimizedRankingEngine startup diagnostics:")
+        print(f"  Current working directory: {Path.cwd()}")
+        print(f"  Resolved embedding cache directory: {self.embeddings_cache_dir}")
+        print(f"  Persisted FAISS index path: {self.faiss_index_path}")
+        self.precomputer._print_cache_diagnostics()
         
         self.candidates = []
         self.candidates_by_id = {}
@@ -44,6 +52,7 @@ class OptimizedRankingEngine:
         self.candidate_embeddings = None
         self.candidate_ids = []
         self.jd_text = None
+        self.jd_keywords = []
         self.jd_embedding = None
         self.candidates_jsonl_path = None
     
@@ -69,8 +78,23 @@ class OptimizedRankingEngine:
         print(f"Loaded {len(self.candidates)} candidates")
     
     def prepare_jd_text(self, jd: str):
-        """Set job description"""
-        self.jd_text = jd
+        """Set job description and extract key JD signals."""
+        self.jd_text = jd.strip()
+        self.jd_keywords = self._extract_jd_keywords(self.jd_text)
+
+    def _extract_jd_keywords(self, text: str) -> List[str]:
+        """Extract strong query terms from the job description."""
+        text = text.lower()
+        candidate_phrases = [
+            'embeddings', 'retrieval', 'vector database', 'faiss', 'milvus', 'pinecone',
+            'semantic search', 'ranking', 'ndcg', 'mrr', 'map', 'a/b testing',
+            'online evaluation', 'production', 'scale', 'recommendation', 'rag',
+            'startup', 'product', 'ml', 'python', 'llm', 'distributed'
+        ]
+        keywords = [phrase for phrase in candidate_phrases if phrase in text]
+        if not keywords:
+            keywords = re.findall(r"\b[ a-z]{3,}\b", text)[:10]
+        return list(dict.fromkeys(keywords))
     
     def _load_or_build_faiss_index(self):
         """Load cached embeddings and FAISS index, or build them once."""
@@ -87,7 +111,7 @@ class OptimizedRankingEngine:
                 }
                 print("Precomputed embeddings ready.")
 
-                if os.path.exists(self.faiss_index_path):
+                if self.faiss_index_path.exists():
                     print(f"Loading persisted FAISS index from {self.faiss_index_path}...")
                     self.faiss_index = self.precomputer.load_faiss_index(self.faiss_index_path)
                     print("FAISS index loaded.")
@@ -207,8 +231,11 @@ class OptimizedRankingEngine:
         # Stage 2: BM25 retrieval (fast keyword match)
         print(f"\n[Stage 2] BM25 retrieval → Top {bm25_top_k}...")
         t0 = datetime.now()
+        bm25_query = self.jd_text
+        if getattr(self, 'jd_keywords', None):
+            bm25_query += ' ' + ' '.join(self.jd_keywords[:20])
         bm25_ids, bm25_scores = self.bm25_retriever.retrieve(
-            self.jd_text,
+            bm25_query,
             top_k=bm25_top_k
         )
         t1 = datetime.now()
@@ -396,6 +423,13 @@ class OptimizedRankingEngine:
             )
         else:
             first_sentence = f"{title} from {company} has strong candidate signals"
+
+        if components.evaluation_framework_score >= 0.4:
+            signals.append('experience with ranking evaluation and A/B testing')
+        if components.product_mindset_score >= 0.4:
+            signals.append('strong startup/product ownership and shipped products')
+        if components.profile_quality_multiplier < 0.85:
+            signals.append('cleaner profile signals preferred for recruiter trust')
 
         if signals:
             second_sentence = ' '.join(signals).capitalize() + '.'

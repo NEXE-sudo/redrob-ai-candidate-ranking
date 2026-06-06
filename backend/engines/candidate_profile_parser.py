@@ -283,3 +283,26 @@ class CandidateProfileParser:
                 issues.append(f"Very short role ({role['duration_months']} months) at {role['company']}")
         
         return issues
+
+    def detect_red_flags(self, parsed_profile: ParsedProfile, candidate_raw: Dict[str, Any]) -> Dict[str, bool]:
+        """Detect obvious red flags or suspicious profile signals."""
+        flags = {
+            'timeline_issues': bool(parsed_profile.timeline_issues),
+            'heavy_skill_padding': parsed_profile.skill_counts > 60,
+            'low_profile_completeness': parsed_profile.profile_completeness < 40,
+            'consulting_only_senior': parsed_profile.is_consulting_only and parsed_profile.years_experience >= 5,
+            'stale_coding_experience': parsed_profile.years_since_last_coding > 1.5,
+            'not_open_to_work': not candidate_raw.get('redrob_signals', {}).get('open_to_work_flag', True),
+            'low_response_rate': candidate_raw.get('redrob_signals', {}).get('recruiter_response_rate', 1.0) < 0.1,
+            'research_without_production': False,
+        }
+
+        career_text = ' '.join([
+            (role.get('description', '') + ' ' + role.get('title', '')).lower()
+            for role in candidate_raw.get('career_history', [])
+        ])
+
+        if 'research' in career_text and not any(keyword in career_text for keyword in self.PRODUCTION_KEYWORDS):
+            flags['research_without_production'] = True
+
+        return flags

@@ -26,10 +26,40 @@ class EmbeddingPrecomputer:
     ):
         self.model_name = model_name
         self.embedding_dim = embedding_dim
-        self.cache_dir = cache_dir
+        self.project_root = Path(__file__).resolve().parents[2]
+        self.engine_dir = Path(__file__).resolve().parents[1]
+        self.cache_dir = self._resolve_cache_dir(cache_dir)
         self.model = None
-        
-        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._print_cache_diagnostics()
+
+    def _resolve_cache_dir(self, cache_dir: str) -> Path:
+        """Resolve cache_dir to an absolute path under the backend project layout."""
+        cache_path = Path(cache_dir)
+        if cache_path.is_absolute():
+            return cache_path.resolve()
+        return (self.engine_dir / cache_path).resolve()
+
+    def _cache_paths(self, output_prefix: str = 'precomputed_embeddings'):
+        embeddings_path = self.cache_dir / f'{output_prefix}_embeddings.npy'
+        ids_path = self.cache_dir / f'{output_prefix}_ids.pkl'
+        metadata_path = self.cache_dir / f'{output_prefix}_metadata.json'
+        faiss_index_path = self.cache_dir / f'{output_prefix}_faiss.index'
+        return embeddings_path, ids_path, metadata_path, faiss_index_path
+
+    def _print_cache_diagnostics(self):
+        print("\nEmbedding cache diagnostics:")
+        print(f"  Current working directory: {Path.cwd()}")
+        print(f"  Project root: {self.project_root}")
+        print(f"  Backend engine directory: {self.engine_dir}")
+        print(f"  Resolved cache directory: {self.cache_dir}")
+        embeddings_path, ids_path, metadata_path, faiss_index_path = self._cache_paths()
+        print("  Cache file locations:")
+        print(f"    Embeddings: {embeddings_path} -> {'FOUND' if embeddings_path.exists() else 'MISSING'}")
+        print(f"    IDs:        {ids_path} -> {'FOUND' if ids_path.exists() else 'MISSING'}")
+        print(f"    Metadata:   {metadata_path} -> {'FOUND' if metadata_path.exists() else 'MISSING'}")
+        print(f"    FAISS idx:  {faiss_index_path} -> {'FOUND' if faiss_index_path.exists() else 'MISSING'}")
     
     def load_model(self):
         """Load Sentence Transformer model"""
@@ -135,37 +165,35 @@ class EmbeddingPrecomputer:
         print(f"\nEmbeddings shape: {embeddings_array.shape}")
         
         # Save embeddings and metadata
-        embeddings_path = os.path.join(self.cache_dir, f'{output_prefix}_embeddings.npy')
-        ids_path = os.path.join(self.cache_dir, f'{output_prefix}_ids.pkl')
-        metadata_path = os.path.join(self.cache_dir, f'{output_prefix}_metadata.json')
-        
+        embeddings_path, ids_path, metadata_path, faiss_index_path = self._cache_paths(output_prefix)
+
         np.save(embeddings_path, embeddings_array)
         with open(ids_path, 'wb') as f:
             pickle.dump(candidate_ids, f)
-        
+
         metadata = {
             'total_candidates': len(candidate_ids),
             'embedding_dim': self.embedding_dim,
             'model_name': self.model_name,
             'created_at': datetime.now().isoformat(),
-            'embeddings_file': embeddings_path,
-            'ids_file': ids_path,
+            'embeddings_file': str(embeddings_path),
+            'ids_file': str(ids_path),
+            'faiss_index_file': str(faiss_index_path),
             'num_batches': len(all_embeddings)
         }
-        
-        faiss_index_path = os.path.join(self.cache_dir, f'{output_prefix}_faiss.index')
+
         self.build_faiss_index(embeddings_array, output_path=faiss_index_path)
-        metadata['faiss_index_file'] = faiss_index_path
 
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
-        
+
         print(f"\nEmbeddings cached:")
         print(f"  Embeddings: {embeddings_path}")
         print(f"  IDs: {ids_path}")
         print(f"  FAISS index: {faiss_index_path}")
         print(f"  Metadata: {metadata_path}")
-        
+
+        self._verify_saved_files(embeddings_path, ids_path, metadata_path, faiss_index_path)
         return metadata
     
     def load_precomputed_embeddings(self, output_prefix: str = 'precomputed_embeddings'):
@@ -174,14 +202,14 @@ class EmbeddingPrecomputer:
         Returns:
             Tuple of (embeddings, candidate_ids, metadata)
         """
-        
-        embeddings_path = os.path.join(self.cache_dir, f'{output_prefix}_embeddings.npy')
-        ids_path = os.path.join(self.cache_dir, f'{output_prefix}_ids.pkl')
-        metadata_path = os.path.join(self.cache_dir, f'{output_prefix}_metadata.json')
-        
-        if not all(os.path.exists(p) for p in [embeddings_path, ids_path, metadata_path]):
-            raise FileNotFoundError(f"Precomputed embeddings not found with prefix '{output_prefix}'")
-        
+
+        embeddings_path, ids_path, metadata_path, _ = self._cache_paths(output_prefix)
+        if not all(path.exists() for path in [embeddings_path, ids_path, metadata_path]):
+            missing = [str(path) for path in [embeddings_path, ids_path, metadata_path] if not path.exists()]
+            raise FileNotFoundError(
+                f"Precomputed embeddings not found with prefix '{output_prefix}'. Missing: {missing}"
+            )
+
         embeddings = np.load(embeddings_path)
         with open(ids_path, 'rb') as f:
             candidate_ids = pickle.load(f)
@@ -197,23 +225,32 @@ class EmbeddingPrecomputer:
     def build_faiss_index(self, embeddings: np.ndarray, output_path: str = None):
         """Build and persist a FAISS inner-product index for embeddings."""
         if output_path is None:
-            output_path = os.path.join(self.cache_dir, 'precomputed_embeddings_faiss.index')
+            _, _, _, output_path = self._cache_paths()
 
         embeddings = embeddings.astype('float32', copy=False)
         index = faiss.IndexFlatIP(embeddings.shape[1])
         index.add(embeddings)
-        faiss.write_index(index, output_path)
+        faiss.write_index(index, str(output_path))
+        output_path = Path(output_path)
+        if not output_path.exists():
+            raise RuntimeError(f"Failed to save FAISS index to {output_path}")
         return output_path
 
     def load_faiss_index(self, index_path: str = None):
         """Load a persisted FAISS index from disk."""
         if index_path is None:
-            index_path = os.path.join(self.cache_dir, 'precomputed_embeddings_faiss.index')
+            _, _, _, index_path = self._cache_paths()
 
-        if not os.path.exists(index_path):
+        index_path = Path(index_path)
+        if not index_path.exists():
             raise FileNotFoundError(f"FAISS index not found at '{index_path}'")
 
-        return faiss.read_index(index_path)
+        return faiss.read_index(str(index_path))
+
+    def _verify_saved_files(self, embeddings_path: Path, ids_path: Path, metadata_path: Path, faiss_index_path: Path):
+        for path in [embeddings_path, ids_path, metadata_path, faiss_index_path]:
+            if not path.exists():
+                raise RuntimeError(f"Cache save failed: required file not found: {path}")
 
 
 def precompute_script(candidates_file: str):

@@ -25,6 +25,11 @@ class ScoringComponents:
     semantic_similarity: float = 0.0  # Will be set from embeddings
     
     @property
+    def profile_quality(self) -> float:
+        """Expose profile quality multiplier as a convenience property."""
+        return self.profile_quality_multiplier
+
+    @property
     def final_score(self) -> float:
         """Calculate weighted final score with profile_quality as multiplier
         
@@ -38,13 +43,13 @@ class ScoringComponents:
         """
         # Calculate base score (before profile quality multiplier)
         base_score = (
-            self.technical_relevance * 0.35 +
+            self.technical_relevance * 0.30 +
             self.production_experience * 0.25 +
-            self.behavioral_engagement * 0.15 +
-            self.experience_level_fit * 0.10 +
+            self.behavioral_engagement * 0.17 +
+            self.experience_level_fit * 0.12 +
             self.evaluation_framework_score * 0.10 +
             self.product_mindset_score * 0.05 +
-            self.semantic_similarity * 0.05
+            self.semantic_similarity * 0.03
         )
         
         # Apply profile_quality as MULTIPLIER (not additive)
@@ -253,46 +258,49 @@ class FeatureScorer:
     ) -> float:
         """Score based on career depth and consistency"""
         
-        # 2A: Career depth
+        # 2A: Career depth and production engineering experience
         ml_months = parsed_profile.career_depth_months.get('ml_months', 0)
         production_months = parsed_profile.career_depth_months.get('production_months', 0)
+        engineering_months = parsed_profile.career_depth_months.get('engineering_months', 0)
         
-        # Need at least 12 months ML + production
-        deep_experience_score = 0.0
-        if ml_months >= 12:
-            deep_experience_score += 0.5
-        if ml_months >= 24:
-            deep_experience_score += 0.3
-        if production_months >= 12:
-            deep_experience_score += 0.2
+        # Score experience with ML, production, and engineering together
+        deep_experience_score = min(
+            0.4 +
+            min(ml_months / 24, 1.0) * 0.25 +
+            min(production_months / 24, 1.0) * 0.20 +
+            min(engineering_months / 36, 1.0) * 0.15,
+            1.0
+        )
         
-        deep_experience_score = min(deep_experience_score, 1.0)
+        # Bonus for sustained scale exposure
+        if parsed_profile.most_recent_company_size in ['1001-5000', '5001-10000', '10001+']:
+            deep_experience_score += 0.05
         
-        # 2B: Role consistency check
+        # 2B: Role consistency / practical delivery signal
         current_title = parsed_profile.current_title.lower()
         is_tech_focused = any(
-            term in current_title 
+            term in current_title
             for term in CandidateProfileParser.ENGINEERING_TITLES
         )
         
         consistency_penalty = 0.0
-        
-        # Check for title-chaser pattern (jumping for seniority)
         titles = [role['title'].lower() for role in candidate_raw['career_history']]
-        seniority_jumps = 0
-        for title in titles:
-            if any(level in title for level in ['principal', 'staff', 'senior', 'manager']):
-                seniority_jumps += 1
-        
-        if seniority_jumps > len(titles) * 0.5:  # More than 50% high-level titles
+        seniority_jumps = sum(
+            1 for title in titles
+            if any(level in title for level in ['principal', 'staff', 'senior', 'manager'])
+        )
+        if titles and seniority_jumps > len(titles) * 0.6:
             consistency_penalty += 0.1
         
-        # Check for narrative consistency
         if not is_tech_focused and parsed_profile.years_experience >= 5:
             consistency_penalty += 0.15
         
-        production_experience = (deep_experience_score * 0.8 + 0.2) * (1.0 - consistency_penalty)
+        # Reduce score if the profile is mostly consulting without production signals
+        career_text = ' '.join([role['description'].lower() for role in candidate_raw['career_history']])
+        if parsed_profile.is_consulting_only and 'production' not in career_text:
+            consistency_penalty += 0.15
         
+        production_experience = max(0.0, deep_experience_score - consistency_penalty)
         return min(max(production_experience, 0.0), 1.0)
     
     def _score_profile_quality_multiplier(
@@ -313,11 +321,13 @@ class FeatureScorer:
         
         # Timeline analysis - DEDUCTION
         if len(parsed_profile.timeline_issues) > 0:
-            multiplier -= min(len(parsed_profile.timeline_issues) * 0.15, 0.3)
+            multiplier -= min(len(parsed_profile.timeline_issues) * 0.12, 0.3)
         
         # Skill realism - MAJOR RED FLAG
-        if parsed_profile.skill_counts > 50:
+        if parsed_profile.skill_counts > 45:
             multiplier -= 0.25  # Strong penalty for likely padding
+        elif parsed_profile.skill_counts > 35:
+            multiplier -= 0.10  # Suspiciously high skill count
         
         # Check for unrealistic skill combinations - MAJOR RED FLAG
         skill_names = [s.lower() for s in parsed_profile.skill_names]
@@ -326,9 +336,9 @@ class FeatureScorer:
         
         # Profile completeness - BONUS/PENALTY
         if parsed_profile.profile_completeness < 40:
-            multiplier -= 0.2  # Very incomplete = suspicious
+            multiplier -= 0.25  # Very incomplete = suspicious
         elif parsed_profile.profile_completeness < 60:
-            multiplier -= 0.1  # Incomplete
+            multiplier -= 0.12  # Incomplete
         elif parsed_profile.profile_completeness >= 80:
             multiplier += 0.05  # Bonus for very complete
         
@@ -339,11 +349,15 @@ class FeatureScorer:
             redrob.get('verified_phone', False),
             redrob.get('linkedin_connected', False)
         ])
-        multiplier += verify_count * 0.10  # Bonus per verification
+        multiplier += min(verify_count, 3) * 0.08
+        
+        # Reward strong GitHub/recruiter signals for trust
+        if redrob.get('github_activity_score', 0) >= 50:
+            multiplier += 0.05
+        if redrob.get('recruiter_response_rate', 0) >= 0.5:
+            multiplier += 0.04
         
         # Ensure multiplier is in valid range [0.2, 1.0]
-        # Floor at 0.2 so even bad profiles aren't completely eliminated
-        # (disqualifiers handled separately)
         multiplier = min(max(multiplier, 0.2), 1.0)
         
         return multiplier
@@ -374,44 +388,58 @@ class FeatureScorer:
     ) -> float:
         """Score availability and engagement signals"""
         
-        redrob = candidate_raw['redrob_signals']
+        redrob = candidate_raw.get('redrob_signals', {})
         score = 1.0
         
         # Availability: open_to_work flag
         if not redrob.get('open_to_work_flag', True):
-            score *= 0.5
+            score *= 0.75
         
         # Notice period
         notice_days = redrob.get('notice_period_days', 30)
         if notice_days <= 30:
-            pass  # Full score
+            score *= 1.02
+        elif notice_days <= 45:
+            score *= 1.00
         elif notice_days <= 60:
             score *= 0.95
         else:
-            score *= min(0.8, max(0.3, 1.0 - (notice_days - 60) / 100))
+            score *= 0.85
         
         # Engagement signals
         response_rate = redrob.get('recruiter_response_rate', 0.0)
-        if response_rate > 0.5:
-            score *= 1.02
+        if response_rate >= 0.65:
+            score *= 1.08
+        elif response_rate >= 0.4:
+            score *= 1.04
+        elif response_rate < 0.15:
+            score *= 0.90
         
         saved_recruiters = redrob.get('saved_by_recruiters_30d', 0)
-        if saved_recruiters > 5:
-            score *= 1.02
+        if saved_recruiters >= 15:
+            score *= 1.08
+        elif saved_recruiters >= 5:
+            score *= 1.04
         
         # Market activity
         search_appearance = redrob.get('search_appearance_30d', 0)
-        if search_appearance > 100:
-            score *= 1.02
+        if search_appearance >= 150:
+            score *= 1.06
+        elif search_appearance >= 80:
+            score *= 1.03
         
         # GitHub activity
         github_score = redrob.get('github_activity_score', -1)
-        if github_score > 30:
-            score *= 1.05
+        if github_score >= 70:
+            score *= 1.08
+        elif github_score >= 40:
+            score *= 1.04
         
         # Profile completeness
         if redrob.get('profile_completeness_score', 0) < 60:
-            score *= 0.85
+            score *= 0.80
+        elif redrob.get('profile_completeness_score', 0) >= 90:
+            score *= 1.03
         
         return min(max(score, 0.0), 1.0)
     

@@ -4,6 +4,7 @@ Implements FAISS-based semantic search for candidate retrieval.
 Uses Sentence Transformers for embedding generation.
 """
 
+import faiss
 import numpy as np
 from typing import List, Tuple
 
@@ -80,11 +81,18 @@ class EmbeddingRetriever:
     
     def __init__(self, model_name: str = 'BAAI/bge-small-en-v1.5'):
         from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer(model_name, device='cpu')
+        self.model_name = model_name
+        self.SentenceTransformer = SentenceTransformer
+        self.model = None
         self.candidate_embeddings = None
         self.candidate_ids = None
         
-    def build_index(self, candidates: List[dict]) -> Tuple[np.ndarray, List[str]]:
+    def load_model(self):
+        if self.model is None:
+            self.model = self.SentenceTransformer(self.model_name, device='cpu')
+            print(f"Loaded embedding model: {self.model_name}")
+
+    def build_index(self, candidates: List[dict], batch_size: int = 64, use_cache: bool = True) -> Tuple[np.ndarray, List[str]]:
         self.candidate_ids = [c['candidate_id'] for c in candidates]
         texts = []
         for candidate in candidates:
@@ -104,6 +112,9 @@ class EmbeddingRetriever:
             
         embeddings = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
         self.candidate_embeddings = embeddings / (np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8)
+        self.candidate_embeddings = self.candidate_embeddings.astype('float32', copy=False)
+        self.index = faiss.IndexFlatIP(self.candidate_embeddings.shape[1])
+        self.index.add(self.candidate_embeddings)
         return self.candidate_embeddings, self.candidate_ids
 
     def retrieve(self, query_text: str, top_k: int = 500) -> Tuple[List[str], List[float]]:
