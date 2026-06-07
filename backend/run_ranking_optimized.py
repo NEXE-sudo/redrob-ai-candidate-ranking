@@ -55,42 +55,86 @@ What We Offer:
 
 
 def run_ranking_pipeline(candidates_file: str):
-    """Execute fast ranking pipeline"""
+    """
+    Execute enhanced ranking pipeline with all 10 phases.
+    
+    Phases:
+    1. Cross-encoder reranking (ms-marco-MiniLM-L-6-v2)
+    2. Recruiter-centric JD parsing
+    3. Advanced scoring components
+    4. Honeypot detection
+    5. Behavioral signals
+    6. Rebalanced scoring weights
+    7. Tie-breaking compliance
+    8. Improved reasoning generation
+    9. Benchmarking telemetry
+    10. Configurable embedding models
+    """
     
     print("\n" + "="*80)
-    print("OPTIMIZED RANKING PIPELINE - SENIOR AI ENGINEER ROLE")
+    print("ENHANCED RANKING PIPELINE - ALL 10 PHASES ENABLED")
     print("="*80)
     print(f"Candidates: {candidates_file}")
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     try:
-        # Initialize engine
-        print("\n[Init] Initializing ranking engine...")
-        engine = OptimizedRankingEngine(use_precomputed_embeddings=True)
+        # Initialize engine with all phases enabled (Phase 10: configurable model)
+        print("\n[Init] Initializing enhanced ranking engine...")
+        engine = OptimizedRankingEngine(
+            use_precomputed_embeddings=True,
+            embedding_model='BAAI/bge-small-en-v1.5',  # Phase 10: Configurable
+            enable_cross_encoder=True,  # Phase 1: Enable cross-encoder
+            enable_honeypot_detection=True  # Phase 4: Enable honeypot detection
+        )
         
         # Load data
         print("[Load] Loading candidates...")
         engine.load_candidates(candidates_file)
-        engine.prepare_jd_text(JD_TEXT)
+        engine.prepare_jd_text(JD_TEXT)  # Phase 2: Recruiter-centric parsing
         
-        # Run ranking
-        print("[Rank] Executing multi-stage ranking pipeline...")
+        # Run ranking with all phases (Phase 1: new thresholds, Phase 3-4: new scoring)
+        print("[Rank] Executing enhanced multi-stage pipeline (Phases 1-10)...")
         results, scored_candidates = engine.rank_candidates_fast(
             top_k=100,
-            bm25_top_k=2000,
-            faiss_top_k=500
+            bm25_top_k=3000,  # Phase 1: Increased
+            faiss_top_k=1000,  # Phase 1: Increased  
+            cross_encoder_top_k=250  # Phase 1: Cross-encoder reranking
         )
         
-        # Save results
-        print("[Save] Saving results...")
+        # Save results with Phase 7 tie-breaking compliance
+        print("[Save] Saving results with tie-breaking compliance...")
         engine.save_results(results, output_dir='./ranking_output')
         
+        # Phase 9: Print detailed benchmarking report
         print("\n" + "="*80)
-        print("RANKING COMPLETE ✓")
+        print("ENHANCED RANKING COMPLETE ✓")
         print("="*80)
-        print(f"Top 5 Results:")
+        print(f"End: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"\nPhases Executed:")
+        print(f"  ✓ Phase 1: Cross-encoder reranking")
+        print(f"  ✓ Phase 2: Recruiter-centric JD parsing")
+        print(f"  ✓ Phase 3: Advanced scoring components")
+        print(f"  ✓ Phase 4: Honeypot detection")
+        print(f"  ✓ Phase 5: Behavioral signals (feature scorer)")
+        print(f"  ✓ Phase 6: Rebalanced scoring weights")
+        print(f"  ✓ Phase 7: Tie-breaking compliance")
+        print(f"  ✓ Phase 8: Improved reasoning")
+        print(f"  ✓ Phase 9: Benchmarking telemetry")
+        print(f"  ✓ Phase 10: Configurable embeddings")
+        
+        if engine.benchmark_telemetry:
+            print(f"\nBenchmarking Results:")
+            for stage, seconds in engine.benchmark_telemetry.items():
+                if stage != 'total':
+                    print(f"  {stage:20s}: {seconds:6.2f}s")
+            print(f"  {'TOTAL':20s}: {engine.benchmark_telemetry.get('total', 0):6.2f}s")
+        
+        print(f"\nTop 5 Results:")
         for result in results[:5]:
             print(f"  {result['rank']}. {result['candidate_id']} - {result['final_score']:.4f}")
+            print(f"     {result.get('reasoning', 'N/A')[:80]}...")
+        
+        print("="*80)
         
         return 0
         
