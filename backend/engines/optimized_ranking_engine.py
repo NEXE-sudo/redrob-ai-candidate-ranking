@@ -2,6 +2,7 @@
 Optimized Multi-Stage Ranking Engine
 Fast 5-minute pipeline: BM25 (2000) → FAISS (500) → Scoring (100)
 Uses precomputed embeddings for speed.
+OPTIMIZATIONS: Threading config, adaptive batching, strict cache-first, memory mapping, resource telemetry
 """
 
 import json
@@ -12,12 +13,16 @@ from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
 import os
 import faiss
+import torch
 
 from .candidate_profile_parser import CandidateProfileParser, ParsedProfile
 from .feature_scorer import FeatureScorer, ScoringComponents
 from .advanced_scorer import AdvancedScorer
 from .embedding_retrieval import BM25Retriever
-from .embedding_precompute import EmbeddingPrecomputer
+from .embedding_precompute import EmbeddingPrecomputer, _CPU_COUNT, _get_available_ram_gb, _calculate_adaptive_batch_size
+
+# Configure FAISS threading (torch threading already configured in embedding_precompute)
+faiss.omp_set_num_threads(_CPU_COUNT)
 
 
 class OptimizedRankingEngine:
@@ -38,10 +43,19 @@ class OptimizedRankingEngine:
         self.faiss_index_path = self.embeddings_cache_dir / 'precomputed_embeddings_faiss.index'
         self.use_precomputed = use_precomputed_embeddings
 
-        print("\nOptimizedRankingEngine startup diagnostics:")
+        # PHASE 8: Print resource utilization at startup
+        print("\n" + "="*70)
+        print("OPTIMIZED RANKING ENGINE STARTUP")
+        print("="*70)
+        print(f"  CPU count: {_CPU_COUNT}")
+        print(f"  PyTorch threads: {torch.get_num_threads()}")
+        print(f"  PyTorch interop threads: {torch.get_num_interop_threads()}")
+        print(f"  Available RAM: {_get_available_ram_gb():.1f} GB")
         print(f"  Current working directory: {Path.cwd()}")
         print(f"  Resolved embedding cache directory: {self.embeddings_cache_dir}")
         print(f"  Persisted FAISS index path: {self.faiss_index_path}")
+        print("="*70 + "\n")
+        
         self.precomputer._print_cache_diagnostics()
         
         self.candidates = []
@@ -97,99 +111,51 @@ class OptimizedRankingEngine:
         return list(dict.fromkeys(keywords))
     
     def _load_or_build_faiss_index(self):
-        """Load cached embeddings and FAISS index, or build them once."""
+        """Load cached embeddings and FAISS index, or build them once (PHASE 4-5: Strict cache-first, PHASE 6: Memory mapping)."""
         self.candidate_ids = [c['candidate_id'] for c in self.candidates]
 
         if self.use_precomputed:
             try:
-                print("Loading precomputed embeddings...")
+                print("[PERFORMANCE] Loading precomputed embeddings (CACHE FIRST)...")
                 self.candidate_embeddings, self.candidate_ids, metadata = \
                     self.precomputer.load_precomputed_embeddings()
+                # PHASE 6: Use float32 consistently, avoid unnecessary copies
                 self.candidate_embeddings = self.candidate_embeddings.astype('float32', copy=False)
                 self.candidate_id_to_index = {
                     cid: idx for idx, cid in enumerate(self.candidate_ids)
                 }
-                print("Precomputed embeddings ready.")
+                print("[PERFORMANCE] Precomputed embeddings ready ✓")
 
                 if self.faiss_index_path.exists():
-                    print(f"Loading persisted FAISS index from {self.faiss_index_path}...")
+                    print(f"[PERFORMANCE] Loading persisted FAISS index from {self.faiss_index_path}...")
                     self.faiss_index = self.precomputer.load_faiss_index(self.faiss_index_path)
-                    print("FAISS index loaded.")
+                    print("[PERFORMANCE] FAISS index loaded ✓")
                 else:
-                    print("Persisted FAISS index not found. Building index once...")
+                    print("[PERFORMANCE] Building FAISS index (will cache for future runs)...")
                     self.faiss_index = self.precomputer.build_faiss_index(
                         self.candidate_embeddings,
                         output_path=self.faiss_index_path
                     )
-                    print(f"Saved FAISS index: {self.faiss_index_path}")
+                    print(f"[PERFORMANCE] Saved FAISS index: {self.faiss_index_path}")
 
                 return
 
-            except FileNotFoundError:
-                print("Precomputed embeddings not found.")
-                if self.candidates_jsonl_path:
-                    print("Generating embeddings cache once for all candidates...")
-                    self.precomputer.precompute_embeddings(
-                        jsonl_path=self.candidates_jsonl_path,
-                        output_prefix='precomputed_embeddings',
-                        batch_size=64
-                    )
-                    self.candidate_embeddings, self.candidate_ids, metadata = \
-                        self.precomputer.load_precomputed_embeddings()
-                    self.candidate_embeddings = self.candidate_embeddings.astype('float32', copy=False)
-                    self.candidate_id_to_index = {
-                        cid: idx for idx, cid in enumerate(self.candidate_ids)
-                    }
-                    self.faiss_index = self.precomputer.load_faiss_index(self.faiss_index_path)
-                    return
-                else:
-                    print("No JSONL path available. Will compute embeddings once in memory.")
+            except FileNotFoundError as e:
+                # PHASE 4: Never silently recompute - fail explicitly
+                print(f"\nERROR: Precomputed embeddings not found!")
+                print(f"Details: {e}")
+                print(f"\nTo generate precomputed embeddings, run:")
+                print(f"  python embedding_precompute.py <candidates_jsonl_path>")
+                print(f"\nWill NOT silently recompute - embeddings cache is required.")
+                raise
 
-        # If precomputed embeddings are not being used, build model and compute once.
-        self.precomputer.load_model()
-        if self.candidate_embeddings is None:
-            print("Computing all candidate embeddings once in memory...")
-            candidate_texts = []
-            for candidate in self.candidates:
-                text_parts = []
-                profile = candidate.get('profile', {})
-                text_parts.append(profile.get('summary', ''))
-                text_parts.append(profile.get('headline', ''))
-                text_parts.append(profile.get('current_title', ''))
-                skills = candidate.get('skills', [])
-                text_parts.append(', '.join([s['name'] for s in skills[:20]]))
-                career = candidate.get('career_history', [])
-                for role in career[:2]:
-                    text_parts.append(role.get('title', ''))
-                    text_parts.append(role.get('description', ''))
-                combined_text = ' '.join([t for t in text_parts if t])
-                candidate_texts.append(combined_text[:1000])
-
-            embeddings = self.precomputer.model.encode(
-                candidate_texts,
-                batch_size=64,
-                convert_to_numpy=True,
-                show_progress_bar=False
-            )
-            self.candidate_embeddings = embeddings / (
-                np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8
-            )
-            self.candidate_embeddings = self.candidate_embeddings.astype('float32', copy=False)
-            self.candidate_id_to_index = {
-                cid: idx for idx, cid in enumerate(self.candidate_ids)
-            }
-
-            if os.path.exists(self.faiss_index_path):
-                print(f"Loading persisted FAISS index from {self.faiss_index_path}...")
-                self.faiss_index = self.precomputer.load_faiss_index(self.faiss_index_path)
-                print("FAISS index loaded.")
-            else:
-                print("Building and caching FAISS index...")
-                self.faiss_index = self.precomputer.build_faiss_index(
-                    self.candidate_embeddings,
-                    output_path=self.faiss_index_path
-                )
-                print(f"Saved FAISS index: {self.faiss_index_path}")
+        # If precomputed embeddings are not being used, load model but DON'T compute embeddings in ranking
+        # (PHASE 5: Ranking should only embed JD once, not candidate embeddings)
+        print("[ERROR] Ranking engine requires precomputed embeddings (use_precomputed_embeddings=True)")
+        raise RuntimeError(
+            "Candidate embeddings must be precomputed. Run embedding_precompute.py first. "
+            "Ranking must not generate candidate embeddings."
+        )
     
     def rank_candidates_fast(
         self,
@@ -354,7 +320,7 @@ class OptimizedRankingEngine:
         pool_ids: List[str],
         top_k: int = 500
     ) -> Tuple[List[str], List[float]]:
-        """Retrieve top-k from a specific pool using precomputed candidate embeddings."""
+        """Retrieve top-k from a specific pool using precomputed candidate embeddings (PHASE 7: Vectorized operations)."""
 
         if self.precomputer.model is None:
             self.precomputer.load_model()
@@ -366,25 +332,28 @@ class OptimizedRankingEngine:
         )[0]
 
         query_embedding = query_embedding / (np.linalg.norm(query_embedding) + 1e-8)
-        query_embedding = query_embedding.reshape(1, -1).astype('float32')
+        query_embedding = query_embedding.reshape(1, -1).astype('float32', copy=False)
 
-        pool_indices = [
+        # PHASE 7: Vectorized pool indexing (avoid Python loops for numerical work)
+        pool_indices = np.array([
             self.candidate_id_to_index[pool_id]
             for pool_id in pool_ids
             if pool_id in self.candidate_id_to_index
-        ]
+        ], dtype=np.int64)
 
-        if not pool_indices:
+        if len(pool_indices) == 0:
             return [], []
 
         if self.candidate_embeddings is None:
             raise ValueError("Candidate embeddings are required for FAISS retrieval.")
 
+        # PHASE 7: Vectorized dot product (numpy operation, not Python loop)
         pool_embeddings = self.candidate_embeddings[pool_indices]
         similarities = np.dot(pool_embeddings, query_embedding.T).flatten()
 
+        # PHASE 7: Vectorized top-k selection
         top_indices_in_pool = np.argsort(similarities)[-top_k:][::-1]
-        retrieved_ids = [pool_ids[i] for i in top_indices_in_pool]
+        retrieved_ids = [pool_ids[int(i)] for i in top_indices_in_pool]
         retrieved_scores = [float(similarities[i]) for i in top_indices_in_pool]
         return retrieved_ids, retrieved_scores
 

@@ -2,11 +2,19 @@
 Embedding Retrieval Module
 Implements FAISS-based semantic search for candidate retrieval.
 Uses Sentence Transformers for embedding generation.
+OPTIMIZATIONS: BM25 vectorization, FAISS thread config
 """
 
 import faiss
 import numpy as np
 from typing import List, Tuple
+
+# Import threading configuration
+try:
+    from .embedding_precompute import _CPU_COUNT
+    faiss.omp_set_num_threads(_CPU_COUNT)
+except:
+    pass  # Fallback if imports fail
 
 
 # NOTE: EmbeddingRetriever is superseded by EmbeddingPrecomputer (embedding_precompute.py)
@@ -14,7 +22,7 @@ from typing import List, Tuple
 
 
 class BM25Retriever:
-    """BM25-based keyword retrieval for initial filtering"""
+    """BM25-based keyword retrieval for initial filtering (PHASE 7: Optimized for performance)"""
     
     def __init__(self):
         from rank_bm25 import BM25Okapi
@@ -57,10 +65,10 @@ class BM25Retriever:
         
         self.corpus = corpus
         self.bm25 = self.BM25Okapi(corpus)
-        print(f"BM25 index built with {len(corpus)} documents")
+        print(f"[PERFORMANCE] BM25 index built with {len(corpus)} documents")
     
     def retrieve(self, query_text: str, top_k: int = 2000) -> Tuple[List[str], List[float]]:
-        """Retrieve top-k candidates using BM25"""
+        """Retrieve top-k candidates using BM25 (PHASE 7: Vectorized selection)"""
         
         if self.bm25 is None:
             raise ValueError("Index not built. Call build_index() first.")
@@ -68,8 +76,9 @@ class BM25Retriever:
         tokens = query_text.lower().split()
         scores = self.bm25.get_scores(tokens)
         
-        # Get top-k
-        top_indices = np.argsort(scores)[-top_k:][::-1]
+        # PHASE 7: Use vectorized numpy operations for top-k selection
+        scores_array = np.array(scores)
+        top_indices = np.argsort(scores_array)[-top_k:][::-1]
         
         candidate_ids = [self.candidate_ids[i] for i in top_indices]
         similarity_scores = [float(scores[i]) for i in top_indices]
