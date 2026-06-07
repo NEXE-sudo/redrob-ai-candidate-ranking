@@ -1,0 +1,8 @@
+reproduce_command: "python backend/rank.py --candidates ./candidates.jsonl --out ./submission.csv"
+
+compute:
+  pre_computation_required: true
+  pre_computation_time_minutes: 15
+
+declarations:
+  honeypot_check_done: true

@@ -103,7 +103,8 @@ def run_ranking_pipeline(candidates_file: str):
         
         # Save results with Phase 7 tie-breaking compliance
         print("[Save] Saving results with tie-breaking compliance...")
-        engine.save_results(results, output_dir='./ranking_output')
+        output_dir = Path(__file__).resolve().parents[1] / 'ranking_output'
+        engine.save_results(results, output_dir=str(output_dir))
         
         # Phase 9: Print detailed benchmarking report
         print("\n" + "="*80)

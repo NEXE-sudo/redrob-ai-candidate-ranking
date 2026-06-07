@@ -49,7 +49,7 @@ What We Offer:
 - Competitive compensation and benefits
 """
 
-CANDIDATES_FILE = "/home/NEXE/projects/Redrob hackathon/[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl"
+CANDIDATES_FILE = sys.argv[1] if len(sys.argv) > 1 else "./candidates.jsonl"
 
 def get_memory_mb():
     """Get current process memory in MB"""
@@ -118,7 +118,9 @@ def run_phase1():
         # Save
         print("\n[5/5] Saving results...")
         t0 = time.time()
-        engine.save_results(results, output_dir='./ranking_output')
+        root_output_dir = Path(__file__).resolve().parents[1] / 'ranking_output'
+        root_output_dir.mkdir(parents=True, exist_ok=True)
+        engine.save_results(results, output_dir=str(root_output_dir))
         save_time = time.time() - t0
         print(f"  ✓ {save_time:.2f}s")
         metrics["save_time"] = save_time
@@ -148,8 +150,9 @@ def run_phase1():
         metrics["total_time"] = total_time
         metrics["memory_increase"] = peak_mem - initial_mem
         
-        os.makedirs('./ranking_output', exist_ok=True)
-        with open('./ranking_output/phase1_metrics.json', 'w') as f:
+        root_output_dir = Path(__file__).resolve().parents[1] / 'ranking_output'
+        root_output_dir.mkdir(parents=True, exist_ok=True)
+        with open(root_output_dir / 'phase1_metrics.json', 'w') as f:
             json.dump(metrics, f, indent=2)
         
         print("\n✓ Phase 1 complete")

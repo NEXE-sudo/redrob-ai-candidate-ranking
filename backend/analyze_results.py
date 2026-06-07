@@ -1,18 +1,22 @@
+import sys
 import os
 import json
 import pandas as pd
+from pathlib import Path
+
+ROOT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / 'ranking_output'
 
 def check_phase2():
     print("\n" + "="*50)
     print("PHASE 2: OUTPUT VALIDATION")
     print("="*50)
-    output_dir = 'ranking_output'
-    if not os.path.exists(output_dir):
+    output_dir = ROOT_OUTPUT_DIR
+    if not output_dir.exists():
         print("Error: ranking_output dir not found")
         return False
         
-    csv_path = os.path.join(output_dir, 'submission.csv')
-    json_path = os.path.join(output_dir, 'ranking_detailed.json')
+    csv_path = output_dir / 'submission.csv'
+    json_path = output_dir / 'ranking_detailed.json'
     
     if not os.path.exists(csv_path) or not os.path.exists(json_path):
         print("Error: Missing submission.csv or ranking_detailed.json")
@@ -56,7 +60,7 @@ def check_phase3():
     print("\n" + "="*50)
     print("PHASE 3: TOP 100 AUDIT")
     print("="*50)
-    json_path = os.path.join('ranking_output', 'ranking_detailed.json')
+    json_path = ROOT_OUTPUT_DIR / 'ranking_detailed.json'
     with open(json_path, 'r') as f:
         data = json.load(f)
         
@@ -73,14 +77,14 @@ def check_phase4():
     print("PHASE 4: HONEYPOT ANALYSIS")
     print("="*50)
     
-    json_path = os.path.join('ranking_output', 'ranking_detailed.json')
+    json_path = ROOT_OUTPUT_DIR / 'ranking_detailed.json'
     with open(json_path, 'r') as f:
         data = json.load(f)
     
     # Load original candidate profiles to check for honeypots
     candidate_ids = set(d['candidate_id'] for d in data)
     
-    candidates_file = "/home/NEXE/projects/Redrob hackathon/[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl"
+    candidates_file = sys.argv[1] if len(sys.argv) > 1 else "./candidates.jsonl"
     
     suspicious = 0
     with open(candidates_file, 'r') as f:

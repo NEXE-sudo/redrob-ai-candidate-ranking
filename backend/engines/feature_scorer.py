@@ -4,7 +4,7 @@ Implements the 5-component scoring system from the ranking strategy.
 """
 
 import re
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 from datetime import datetime
 from dataclasses import dataclass
 import numpy as np
@@ -14,48 +14,42 @@ from .candidate_profile_parser import ParsedProfile, CandidateProfileParser
 
 @dataclass
 class ScoringComponents:
-    """Individual component scores"""
-    technical_relevance: float
-    production_experience: float
-    profile_quality_multiplier: float  # NOW A MULTIPLIER (was additive)
-    behavioral_engagement: float
+    title_relevance: float          # NEW: decisive anti-stuffer signal
+    skill_trust_score: float        # NEW: endorsement+duration weighted
+    assessment_score: float         # NEW: platform-verified
+    technical_relevance: float      # existing keyword/scale score
+    production_experience: float    # existing
+    profile_quality_multiplier: float
     experience_level_fit: float
-    evaluation_framework_score: float = 0.0
-    product_mindset_score: float = 0.0
-    semantic_similarity: float = 0.0  # Will be set from embeddings
-    
-    @property
-    def profile_quality(self) -> float:
-        """Expose profile quality multiplier as a convenience property."""
-        return self.profile_quality_multiplier
+    education_score: float          # NEW
+    evaluation_framework_score: float
+    product_mindset_score: float
+    semantic_similarity: float
+    behavioral_multiplier: float    # CHANGED: now a multiplier not additive
 
     @property
     def final_score(self) -> float:
-        """Calculate weighted final score with profile_quality as multiplier
-        
-        Formula:
-        base_score = (technical * 0.35 + production * 0.25 + engagement * 0.15 +
-                      experience * 0.10 + eval_framework * 0.10 + product_mindset * 0.05 +
-                      semantic * 0.05)
-        final_score = base_score * profile_quality_multiplier
-        
-        This ensures suspicious profiles cannot rank highly through keyword matching.
         """
-        # Calculate base score (before profile quality multiplier)
-        base_score = (
-            self.technical_relevance * 0.30 +
-            self.production_experience * 0.25 +
-            self.behavioral_engagement * 0.17 +
-            self.experience_level_fit * 0.12 +
-            self.evaluation_framework_score * 0.10 +
-            self.product_mindset_score * 0.05 +
-            self.semantic_similarity * 0.03
+        Base score built from structured signals, then multiplied by
+        behavioral multiplier and profile quality.
+
+        Weights designed to make title + trust skills + assessments
+        decisive so that keyword stuffers cannot rank highly.
+        """
+        base = (
+            self.title_relevance        * 0.30 +
+            self.skill_trust_score      * 0.25 +
+            self.assessment_score       * 0.20 +
+            self.experience_level_fit   * 0.08 +
+            self.education_score        * 0.05 +
+            self.technical_relevance    * 0.05 +
+            self.production_experience  * 0.04 +
+            self.evaluation_framework_score * 0.02 +
+            self.semantic_similarity    * 0.01
         )
-        
-        # Apply profile_quality as MULTIPLIER (not additive)
-        final_score = base_score * self.profile_quality_multiplier
-        
-        return min(max(final_score, 0.0), 1.0)
+
+        final = base * self.profile_quality_multiplier * self.behavioral_multiplier
+        return min(max(final, 0.0), 1.0)
 
 
 class FeatureScorer:
@@ -99,39 +93,62 @@ class FeatureScorer:
         parsed_profile: ParsedProfile,
         semantic_similarity: float = 0.0,
         reference_date: datetime = None,
-        advanced_scorer = None  # Optional AdvancedScorer instance
+        advanced_scorer=None,
+        jd_skill_keywords: List[str] = None
     ) -> ScoringComponents:
-        """Score candidate on all dimensions including new components"""
-        
+
         if reference_date is None:
             reference_date = datetime.now()
-        
-        technical_relevance = self._score_technical_relevance(candidate_raw, parsed_profile)
-        production_experience = self._score_production_experience(parsed_profile, candidate_raw)
-        profile_quality_multiplier = self._score_profile_quality_multiplier(parsed_profile, candidate_raw)
-        behavioral_engagement = self._score_behavioral_engagement(candidate_raw, reference_date)
+
+        if jd_skill_keywords is None:
+            jd_skill_keywords = []
+
+        title_relevance = self._score_title_relevance(parsed_profile)
+        skill_trust = self._score_skill_trust(
+            candidate_raw, parsed_profile, jd_skill_keywords
+        )
+        assessment_score = self._score_skill_assessments(
+            candidate_raw, jd_skill_keywords
+        )
+        technical_relevance = self._score_technical_relevance(
+            candidate_raw, parsed_profile
+        )
+        production_experience = self._score_production_experience(
+            parsed_profile, candidate_raw
+        )
+        profile_quality_multiplier = self._score_profile_quality_multiplier(
+            parsed_profile, candidate_raw
+        )
         experience_level_fit = self._score_experience_level_fit(parsed_profile)
-        
-        # New components (use advanced_scorer if provided)
+        education_score = self._score_education(parsed_profile)
+        behavioral_multiplier = self._compute_behavioral_multiplier(
+            candidate_raw, parsed_profile, reference_date
+        )
+
         evaluation_framework_score = 0.0
         product_mindset_score = 0.0
-        
         if advanced_scorer:
-            evaluation_framework_score = advanced_scorer.score_evaluation_framework(candidate_raw)
-            product_mindset_score = advanced_scorer.score_product_mindset(candidate_raw, parsed_profile)
-        
-        components = ScoringComponents(
+            evaluation_framework_score = advanced_scorer.score_evaluation_framework(
+                candidate_raw
+            )
+            product_mindset_score = advanced_scorer.score_product_mindset(
+                candidate_raw, parsed_profile
+            )
+
+        return ScoringComponents(
+            title_relevance=title_relevance,
+            skill_trust_score=skill_trust,
+            assessment_score=assessment_score,
             technical_relevance=technical_relevance,
             production_experience=production_experience,
             profile_quality_multiplier=profile_quality_multiplier,
-            behavioral_engagement=behavioral_engagement,
             experience_level_fit=experience_level_fit,
+            education_score=education_score,
             evaluation_framework_score=evaluation_framework_score,
             product_mindset_score=product_mindset_score,
-            semantic_similarity=semantic_similarity
+            semantic_similarity=semantic_similarity,
+            behavioral_multiplier=behavioral_multiplier
         )
-        
-        return components
     
     def _score_technical_relevance(
         self,
@@ -154,7 +171,222 @@ class FeatureScorer:
         technical_relevance = technical_base * (1.0 - recency_penalty)
         
         return min(max(technical_relevance, 0.0), 1.0)
-    
+
+    def _score_title_relevance(
+        self,
+        parsed_profile: ParsedProfile
+    ) -> float:
+        """
+        Score how relevant the candidate's current title is to the JD role.
+        This is the decisive anti-keyword-stuffer signal.
+        An HR Manager scores 0.0 regardless of listed skills.
+        An ML Engineer scores 1.0.
+        Check both current_title and most_recent_role_title.
+        """
+        TITLE_TIERS = {
+            "tier_1": [
+                "ml engineer", "machine learning engineer", "ai engineer",
+                "ranking engineer", "search engineer", "recommendation engineer",
+                "nlp engineer", "research scientist", "applied scientist",
+                "data scientist", "computer vision engineer", "deep learning engineer",
+                "retrieval engineer", "recsys engineer", "principal engineer",
+                "staff engineer", "senior engineer"
+            ],
+            "tier_2": [
+                "software engineer", "data engineer", "backend engineer",
+                "platform engineer", "full stack engineer", "infrastructure engineer",
+                "analytics engineer", "ml ops engineer", "mlops", "devops engineer"
+            ],
+            "tier_3": [
+                "data analyst", "business analyst", "product manager",
+                "technical lead", "engineering manager", "solutions architect"
+            ]
+        }
+
+        TITLE_TIER_SCORES = {"tier_1": 1.0, "tier_2": 0.5, "tier_3": 0.2, "tier_4": 0.0}
+
+        titles_to_check = [
+            parsed_profile.current_title.lower(),
+            parsed_profile.most_recent_role_title.lower()
+        ]
+
+        best_score = 0.0
+        for title in titles_to_check:
+            for tier, keywords in TITLE_TIERS.items():
+                if any(kw in title for kw in keywords):
+                    tier_score = TITLE_TIER_SCORES[tier]
+                    if tier_score > best_score:
+                        best_score = tier_score
+                    break
+
+        return best_score
+
+    def _score_skill_trust(
+        self,
+        candidate_raw: Dict[str, Any],
+        parsed_profile: ParsedProfile,
+        jd_skill_keywords: List[str]
+    ) -> float:
+        """
+        Score skills weighted by proficiency, duration_months, and endorsements.
+        Raw keyword presence without backing (endorsements=0, duration=0)
+        contributes near-zero. This defeats keyword stuffing.
+
+        jd_skill_keywords: list of lowercase skill terms from the JD
+        """
+        if not candidate_raw.get("skills"):
+            return 0.0
+
+        PROFICIENCY_MAP = {
+            "beginner": 0.25, "intermediate": 0.5,
+            "advanced": 0.75, "expert": 1.0
+        }
+
+        total_trust = 0.0
+        matched_count = 0
+
+        for skill in candidate_raw["skills"]:
+            name = skill.get("name", "").lower()
+            is_relevant = any(jd_kw in name or name in jd_kw
+                              for jd_kw in jd_skill_keywords)
+            if not is_relevant:
+                continue
+
+            prof = PROFICIENCY_MAP.get(skill.get("proficiency", "beginner"), 0.25)
+            dur = min(skill.get("duration_months", 0) / 36.0, 1.0)
+            end = min(skill.get("endorsements", 0) / 20.0, 1.0)
+
+            trust = prof * 0.4 + dur * 0.4 + end * 0.2
+            total_trust += trust
+            matched_count += 1
+
+        if matched_count == 0:
+            return 0.0
+
+        return min(total_trust / 5.0, 1.0)
+
+    def _score_skill_assessments(
+        self,
+        candidate_raw: Dict[str, Any],
+        jd_skill_keywords: List[str]
+    ) -> float:
+        """
+        Score platform-verified skill assessment results.
+        This is the hardest signal to fake — an HR Manager will not have
+        a Python or FAISS assessment score.
+        Returns 0.0 if no relevant assessments exist.
+        """
+        assessments = candidate_raw.get("redrob_signals", {}).get(
+            "skill_assessment_scores", {}
+        )
+        if not assessments:
+            return 0.0
+
+        relevant_scores = []
+        for skill_name, score in assessments.items():
+            skill_lower = skill_name.lower()
+            if any(jd_kw in skill_lower or skill_lower in jd_kw
+                   for jd_kw in jd_skill_keywords):
+                relevant_scores.append(score / 100.0)
+
+        if not relevant_scores:
+            return 0.0
+
+        return min(sum(relevant_scores) / len(relevant_scores), 1.0)
+
+    def _score_education(self, parsed_profile: ParsedProfile) -> float:
+        """Score education institution tier."""
+        tier_scores = {
+            "tier_1": 1.0,
+            "tier_2": 0.7,
+            "tier_3": 0.4,
+            "tier_4": 0.2,
+            "unknown": 0.3
+        }
+        return tier_scores.get(parsed_profile.education_tier, 0.3)
+
+    def _compute_behavioral_multiplier(
+        self,
+        candidate_raw: Dict[str, Any],
+        parsed_profile: ParsedProfile,
+        reference_date: datetime
+    ) -> float:
+        """
+        Compute behavioral multiplier (0.4 to 1.3 range).
+        Applied multiplicatively to the base score, not additively.
+
+        Key signals:
+        - open_to_work_flag: hard availability gate
+        - interview_completion_rate: ghost risk
+        - offer_acceptance_rate: pipeline waste risk
+        - recruiter_response_rate: engagement signal
+        - notice_period_days: time-to-start
+        - last_active_date: recency of platform activity
+        """
+        redrob = candidate_raw.get("redrob_signals", {})
+        multiplier = 1.0
+
+        if not redrob.get("open_to_work_flag", True):
+            multiplier *= 0.5
+
+        completion_rate = parsed_profile.interview_completion_rate
+        if completion_rate < 0.4:
+            multiplier *= 0.6
+        elif completion_rate < 0.7:
+            multiplier *= 0.85
+        elif completion_rate >= 0.9:
+            multiplier *= 1.05
+
+        acceptance = parsed_profile.offer_acceptance_rate
+        if acceptance == -1:
+            pass
+        elif acceptance < 0.3:
+            multiplier *= 0.75
+        elif acceptance >= 0.7:
+            multiplier *= 1.05
+
+        response_rate = redrob.get("recruiter_response_rate", 0.5)
+        if response_rate >= 0.65:
+            multiplier *= 1.08
+        elif response_rate < 0.15:
+            multiplier *= 0.85
+
+        notice = redrob.get("notice_period_days", 30)
+        if notice <= 15:
+            multiplier *= 1.05
+        elif notice <= 30:
+            multiplier *= 1.02
+        elif notice > 90:
+            multiplier *= 0.88
+
+        last_active_str = redrob.get("last_active_date", "")
+        if last_active_str:
+            try:
+                last_active = datetime.strptime(last_active_str, "%Y-%m-%d")
+                days_inactive = (reference_date - last_active).days
+                if days_inactive > 180:
+                    multiplier *= 0.80
+                elif days_inactive > 90:
+                    multiplier *= 0.90
+                elif days_inactive <= 30:
+                    multiplier *= 1.05
+            except ValueError:
+                pass
+
+        github = redrob.get("github_activity_score", -1)
+        if github >= 70:
+            multiplier *= 1.08
+        elif github >= 40:
+            multiplier *= 1.04
+
+        saved = redrob.get("saved_by_recruiters_30d", 0)
+        if saved >= 10:
+            multiplier *= 1.05
+        elif saved >= 5:
+            multiplier *= 1.02
+
+        return min(max(multiplier, 0.4), 1.3)
+
     def _keyword_match_score(
         self,
         candidate_raw: Dict[str, Any],
@@ -381,68 +613,6 @@ class FeatureScorer:
         
         return suspicious_combos >= 3 and len(skill_names) > 30
     
-    def _score_behavioral_engagement(
-        self,
-        candidate_raw: Dict[str, Any],
-        reference_date: datetime
-    ) -> float:
-        """Score availability and engagement signals"""
-        
-        redrob = candidate_raw.get('redrob_signals', {})
-        score = 1.0
-        
-        # Availability: open_to_work flag
-        if not redrob.get('open_to_work_flag', True):
-            score *= 0.75
-        
-        # Notice period
-        notice_days = redrob.get('notice_period_days', 30)
-        if notice_days <= 30:
-            score *= 1.02
-        elif notice_days <= 45:
-            score *= 1.00
-        elif notice_days <= 60:
-            score *= 0.95
-        else:
-            score *= 0.85
-        
-        # Engagement signals
-        response_rate = redrob.get('recruiter_response_rate', 0.0)
-        if response_rate >= 0.65:
-            score *= 1.08
-        elif response_rate >= 0.4:
-            score *= 1.04
-        elif response_rate < 0.15:
-            score *= 0.90
-        
-        saved_recruiters = redrob.get('saved_by_recruiters_30d', 0)
-        if saved_recruiters >= 15:
-            score *= 1.08
-        elif saved_recruiters >= 5:
-            score *= 1.04
-        
-        # Market activity
-        search_appearance = redrob.get('search_appearance_30d', 0)
-        if search_appearance >= 150:
-            score *= 1.06
-        elif search_appearance >= 80:
-            score *= 1.03
-        
-        # GitHub activity
-        github_score = redrob.get('github_activity_score', -1)
-        if github_score >= 70:
-            score *= 1.08
-        elif github_score >= 40:
-            score *= 1.04
-        
-        # Profile completeness
-        if redrob.get('profile_completeness_score', 0) < 60:
-            score *= 0.80
-        elif redrob.get('profile_completeness_score', 0) >= 90:
-            score *= 1.03
-        
-        return min(max(score, 0.0), 1.0)
-    
     def _score_experience_level_fit(self, parsed_profile: ParsedProfile) -> float:
         """Score experience in target band (5-9 years)"""
         
@@ -479,9 +649,12 @@ class FeatureScorer:
             for role in candidate_raw['career_history']
         ])
         
-        if 'research' in ' '.join([role['title'].lower() for role in candidate_raw['career_history']]) * 3:
+        career_titles = [role['title'].lower() for role in candidate_raw['career_history']]
+        research_title_count = sum(1 for t in career_titles if 'research' in t)
+        is_research_heavy = research_title_count >= max(1, len(career_titles) * 0.5)
+        if is_research_heavy:
             if not any(keyword in career_text for keyword in CandidateProfileParser.PRODUCTION_KEYWORDS):
-                multiplier *= 0.1
+                multiplier *= 0.3
         
         # Pure consulting background (TCS/Infosys etc)
         if parsed_profile.is_consulting_only and parsed_profile.years_experience >= 5:

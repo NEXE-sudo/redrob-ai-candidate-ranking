@@ -289,7 +289,7 @@ if passed == total:
     print("="*80)
     print("\nNext Steps:")
     print("  1. Run full ranking: python run_ranking_optimized.py")
-    print("  2. Validate outputs in ranking_output/")
+    print("  2. Validate outputs in the root-level ranking_output/ directory")
     print("  3. Submit submission.csv to challenge")
 else:
     print("\n⚠ Some checks failed - review above")

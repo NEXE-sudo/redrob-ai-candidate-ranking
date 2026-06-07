@@ -31,6 +31,13 @@ class ParsedProfile:
     years_since_last_coding: float
     has_github: bool
     github_activity_score: float
+    education_tier: str           # "tier_1", "tier_2", "tier_3", "tier_4", "unknown"
+    has_skill_assessments: bool   # True if any skill_assessment_scores exist
+    assessment_relevant_score: float  # 0.0-1.0, avg of JD-relevant assessments
+    interview_completion_rate: float  # from redrob_signals
+    offer_acceptance_rate: float      # from redrob_signals, -1 means no history
+    avg_response_time_hours: float    # from redrob_signals
+    top_skill_trust_scores: dict      # {skill_name: trust_score} for top 10 skills
 
 
 class CandidateProfileParser:
@@ -152,6 +159,48 @@ class CandidateProfileParser:
         has_github = redrob_signals['github_activity_score'] >= 0
         github_activity_score = max(0, redrob_signals['github_activity_score'])
         
+        # Education tier — take the highest tier found across all education entries
+        # tier_1 > tier_2 > tier_3 > tier_4 > unknown
+        TIER_ORDER = ["tier_1", "tier_2", "tier_3", "tier_4", "unknown"]
+        best_tier = "unknown"
+        for edu in candidate_raw.get("education", []):
+            t = edu.get("tier", "unknown")
+            try:
+                if TIER_ORDER.index(t) < TIER_ORDER.index(best_tier):
+                    best_tier = t
+            except ValueError:
+                pass
+        education_tier = best_tier
+
+        # Skill assessment scores
+        assessments = redrob_signals.get("skill_assessment_scores", {})
+        has_skill_assessments = len(assessments) > 0
+
+        # assessment_relevant_score is computed in feature_scorer with JD context
+        # set to 0.0 here, will be overridden during scoring
+        assessment_relevant_score = 0.0
+
+        # Behavioral reliability signals
+        interview_completion_rate = redrob_signals.get("interview_completion_rate", 0.5)
+        raw_acceptance = redrob_signals.get("offer_acceptance_rate", -1)
+        offer_acceptance_rate = raw_acceptance  # keep -1 as sentinel for no history
+        avg_response_time_hours = redrob_signals.get("avg_response_time_hours", 24.0)
+
+        # Skill trust scores — compute per skill
+        # trust = proficiency_weight * 0.4 + duration_weight * 0.4 + endorsement_weight * 0.2
+        PROFICIENCY_MAP = {
+            "beginner": 0.25, "intermediate": 0.5, "advanced": 0.75, "expert": 1.0
+        }
+        skill_trust = {}
+        for s in skills:
+            name = s.get("name", "")
+            prof = PROFICIENCY_MAP.get(s.get("proficiency", "beginner"), 0.25)
+            dur = min(s.get("duration_months", 0) / 36.0, 1.0)
+            end = min(s.get("endorsements", 0) / 20.0, 1.0)
+            trust = prof * 0.4 + dur * 0.4 + end * 0.2
+            skill_trust[name.lower()] = trust
+        top_skill_trust_scores = skill_trust
+        
         return ParsedProfile(
             candidate_id=candidate_id,
             years_experience=years_experience,
@@ -171,7 +220,14 @@ class CandidateProfileParser:
             most_recent_company_size=most_recent_company_size,
             years_since_last_coding=years_since_last_coding,
             has_github=has_github,
-            github_activity_score=github_activity_score
+            github_activity_score=github_activity_score,
+            education_tier=education_tier,
+            has_skill_assessments=has_skill_assessments,
+            assessment_relevant_score=assessment_relevant_score,
+            interview_completion_rate=interview_completion_rate,
+            offer_acceptance_rate=offer_acceptance_rate,
+            avg_response_time_hours=avg_response_time_hours,
+            top_skill_trust_scores=top_skill_trust_scores
         )
     
     def _classify_company(self, career_history: List[Dict]) -> Tuple[str, bool]:
@@ -261,21 +317,25 @@ class CandidateProfileParser:
             current_role = sorted_history[i]
             next_role = sorted_history[i + 1]
             
-            current_end = current_role['end_date']
-            next_start = next_role['start_date']
-            
-            if current_end and next_start:
-                current_end_date = datetime.strptime(current_end, '%Y-%m-%d')
-                next_start_date = datetime.strptime(next_start, '%Y-%m-%d')
+            try:
+                current_end = current_role['end_date']
+                next_start = next_role['start_date']
                 
-                # Check for overlap
-                if current_end_date > next_start_date:
-                    issues.append(f"Overlapping roles: {current_role['company']} ends after {next_role['company']} starts")
-                
-                # Check for large gaps
-                gap_days = (current_end_date - next_start_date).days
-                if gap_days > 365:
-                    issues.append(f"Large gap ({gap_days} days) between {current_role['company']} and {next_role['company']}")
+                if current_end and next_start:
+                    current_end_date = datetime.strptime(current_end, '%Y-%m-%d')
+                    next_start_date = datetime.strptime(next_start, '%Y-%m-%d')
+                    
+                    # Check for overlap
+                    if current_end_date > next_start_date:
+                        issues.append(f"Overlapping roles: {current_role['company']} ends after {next_role['company']} starts")
+                    
+                    # Check for large gaps
+                    gap_days = (current_end_date - next_start_date).days
+                    if gap_days > 365:
+                        issues.append(f"Large gap ({gap_days} days) between {current_role['company']} and {next_role['company']}")
+            except (ValueError, TypeError):
+                issues.append(f"Could not parse dates for role at {current_role['company']}")
+                continue
         
         # Check for very short roles
         for role in career_history:

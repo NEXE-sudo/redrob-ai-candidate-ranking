@@ -15,13 +15,22 @@ _cross_encoder = None
 
 
 def _get_cross_encoder():
-    """Lazy load cross-encoder model"""
     global _cross_encoder
     if _cross_encoder is None:
         try:
             from sentence_transformers import CrossEncoder
-            print("[CrossEncoder] Loading cross-encoder model...")
-            _cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu')
+            # Try local path first (for offline judging environments)
+            local_path = Path(__file__).parent.parent / "models" / "cross-encoder-ms-marco-MiniLM-L-6-v2"
+            if local_path.exists():
+                print(f"[CrossEncoder] Loading from local path: {local_path}")
+                _cross_encoder = CrossEncoder(str(local_path), device='cpu')
+            else:
+                print("[CrossEncoder] Local model not found, loading from HuggingFace...")
+                print("[CrossEncoder] WARNING: This requires network access.")
+                print("[CrossEncoder] Run scripts/download_models.py to cache locally.")
+                _cross_encoder = CrossEncoder(
+                    'cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu'
+                )
             print("[CrossEncoder] Model loaded ✓")
         except ImportError:
             raise ImportError(

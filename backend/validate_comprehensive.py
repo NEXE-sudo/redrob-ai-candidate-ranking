@@ -78,7 +78,7 @@ if not found_saas:
 print("\nPHASE 2: OUTPUT FORMAT VALIDATION")
 print("-" * 80)
 
-output_dir = Path("./ranking_output")
+output_dir = Path(__file__).resolve().parents[1] / "ranking_output"
 if output_dir.exists():
     csv_file = output_dir / "submission.csv"
     json_file = output_dir / "ranking_detailed.json"

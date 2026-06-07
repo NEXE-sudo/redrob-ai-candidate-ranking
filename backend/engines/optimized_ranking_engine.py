@@ -139,6 +139,10 @@ class OptimizedRankingEngine:
         
         # Legacy keywords for backward compatibility
         self.jd_keywords = self._extract_jd_keywords(self.jd_text)
+
+        # Extract structured skill keywords for trust scoring
+        self.jd_skill_keywords = self._extract_jd_skill_keywords(self.jd_text)
+        print(f"  JD skill keywords: {self.jd_skill_keywords}")
         
         # Print extracted requirements (Phase 2 telemetry)
         print("\n[Phase 2] JD Parsing Results:")
@@ -161,6 +165,25 @@ class OptimizedRankingEngine:
         if not keywords:
             keywords = re.findall(r"\b[ a-z]{3,}\b", text)[:10]
         return list(dict.fromkeys(keywords))
+
+    def _extract_jd_skill_keywords(self, jd_text: str) -> List[str]:
+        """
+        Extract skill-specific keywords from JD for use in skill trust
+        and assessment scoring. More targeted than general BM25 keywords.
+        """
+        jd_lower = jd_text.lower()
+        skill_terms = [
+            "python", "pytorch", "tensorflow", "scikit-learn",
+            "embeddings", "faiss", "milvus", "pinecone", "weaviate", "qdrant",
+            "elasticsearch", "opensearch", "vector database",
+            "ranking", "learning-to-rank", "ltr", "ndcg", "mrr", "map",
+            "recommendation", "retrieval", "semantic search", "rag",
+            "llm", "fine-tuning", "lora", "transformer",
+            "machine learning", "deep learning", "nlp",
+            "a/b testing", "experimentation", "production ml",
+            "xgboost", "lightgbm", "spark", "distributed systems"
+        ]
+        return [term for term in skill_terms if term in jd_lower]
     
     def _load_or_build_faiss_index(self):
         """Load cached embeddings and FAISS index, or build them once (PHASE 4-5: Strict cache-first, PHASE 6: Memory mapping)."""
@@ -341,7 +364,8 @@ class OptimizedRankingEngine:
                 candidate,
                 parsed,
                 semantic_similarity=semantic_sim,
-                advanced_scorer=self.advanced_scorer
+                advanced_scorer=self.advanced_scorer,
+                jd_skill_keywords=self.jd_skill_keywords
             )
             
             # Phase 3: Add new component scores
@@ -356,21 +380,26 @@ class OptimizedRankingEngine:
                 risk_score = self.honeypot_detector.calculate_risk_score(parsed, candidate)
                 honeypot_penalty = self.honeypot_detector.get_penalty_multiplier(risk_score)
             
-            # Phase 6: Rebalanced scoring with new weights
-            base_score = (
-                components.technical_relevance * 0.20 +
-                components.production_experience * 0.15 +
-                components.semantic_similarity * 0.25 +
-                components.behavioral_engagement * 0.05 +
-                components.experience_level_fit * 0.05 +
-                career_traj_score * 0.05 +
-                product_fit_score * 0.05 +
-                retrieval_depth_score * 0.10 +
-                eval_framework_score * 0.10
+            # Use ScoringComponents.final_score which already incorporates
+            # the new weights, behavioral multiplier, and profile quality.
+            # Do NOT recompute weights here — trust the dataclass formula.
+            final_score = components.final_score
+
+            # Apply honeypot penalty on top
+            if self.honeypot_detector:
+                risk_score = self.honeypot_detector.calculate_risk_score(parsed, candidate)
+                honeypot_penalty = self.honeypot_detector.get_penalty_multiplier(risk_score)
+            else:
+                honeypot_penalty = 1.0
+
+            final_score = final_score * honeypot_penalty
+
+            # Apply additional disqualifiers (consulting-only etc.)
+            final_score = self.feature_scorer.apply_disqualifying_factors(
+                final_score,
+                parsed,
+                candidate
             )
-            
-            # Apply profile quality as multiplier and honeypot penalty
-            final_score = base_score * components.profile_quality_multiplier * honeypot_penalty
             
             # Apply additional disqualifiers
             final_score = self.feature_scorer.apply_disqualifying_factors(
@@ -425,18 +454,18 @@ class OptimizedRankingEngine:
                 'candidate_id': scored['candidate_id'],
                 'final_score': float(scored['final_score']),
                 'components': {
+                    'title_relevance': float(scored['components'].title_relevance),
+                    'skill_trust_score': float(scored['components'].skill_trust_score),
+                    'assessment_score': float(scored['components'].assessment_score),
                     'technical_relevance': float(scored['components'].technical_relevance),
                     'production_experience': float(scored['components'].production_experience),
                     'profile_quality_multiplier': float(scored['components'].profile_quality_multiplier),
-                    'behavioral_engagement': float(scored['components'].behavioral_engagement),
                     'experience_level_fit': float(scored['components'].experience_level_fit),
+                    'education_score': float(scored['components'].education_score),
+                    'behavioral_multiplier': float(scored['components'].behavioral_multiplier),
+                    'semantic_similarity': float(scored['components'].semantic_similarity),
                     'evaluation_framework_score': float(scored['components'].evaluation_framework_score),
                     'product_mindset_score': float(scored['components'].product_mindset_score),
-                    'semantic_similarity': float(scored['components'].semantic_similarity),
-                    'career_trajectory_score': float(scored.get('career_trajectory_score', 0.0)),
-                    'product_fit_score': float(scored.get('product_fit_score', 0.0)),
-                    'retrieval_depth_score': float(scored.get('retrieval_depth_score', 0.0)),
-                    'eval_framework_score': float(scored.get('eval_framework_score', 0.0))
                 },
                 'reasoning': reasoning_text
             }
@@ -525,69 +554,65 @@ class OptimizedRankingEngine:
         eval_framework_score: float = 0.0,
         honeypot_penalty: float = 1.0
     ) -> str:
-        """
-        Phase 8: Generate factual, candidate-specific reasoning.
-        
-        Rules:
-        - Reference actual data: years, titles, skills
-        - Use different templates for different candidates
-        - Max 2 sentences
-        - Never hallucinate
-        - Call out concerns if present
-        """
-        profile = candidate_raw.get('profile', {})
-        skills = [s.get('name', '').strip() for s in candidate_raw.get('skills', []) if s.get('name')]
-        top_skills = ', '.join(skills[:3]) if skills else ''
-        
-        company = parsed_profile.current_company or parsed_profile.most_recent_role_company or ''
-        title = parsed_profile.current_title or parsed_profile.most_recent_role_title or ''
-        years_exp = parsed_profile.years_experience or 0
-        
-        factual_signals = []
-        
-        # Build fact-based first sentence
-        if years_exp > 0 and title:
-            first_sentence = f"{years_exp:.0f}-year {'AI/ML ' if any(x in title.lower() for x in ['ml', 'ai', 'data']) else ''}engineer with {title.lower()} background"
-        elif title and company:
-            first_sentence = f"{'AI/ML engineer' if any(x in title.lower() for x in ['ml', 'ai']) else title.title()} at {company}"
-        else:
-            first_sentence = "Strong candidate profile"
-        
-        # Build specifics based on actual scores
-        if retrieval_depth_score >= 0.5:
-            factual_signals.append("proven retrieval and vector DB expertise")
-        
-        if eval_framework_score >= 0.5:
-            factual_signals.append("strong ranking evaluation and metrics knowledge")
-        
-        if product_fit_score >= 0.6:
-            factual_signals.append("product company and startup background")
-        
-        if career_trajectory_score >= 0.6:
-            factual_signals.append("strong career progression in ML/ranking roles")
-        
-        if components.production_experience >= 0.7:
-            factual_signals.append("demonstrated production deployment experience")
-        
-        if components.behavioral_engagement >= 0.6:
-            factual_signals.append("high recruiter engagement signals")
-        
-        # Add concerns if present
-        if honeypot_penalty < 0.9:
-            factual_signals.append("profile quality concerns noted")
-        
-        if not factual_signals:
-            # Generic fallback
-            if top_skills:
-                factual_signals.append(f"skills in {top_skills}")
-            else:
-                factual_signals.append("technical fit to job requirements")
-        
-        second_sentence = '; '.join(factual_signals[:2]).capitalize() + '.'
-        
-        return f"{first_sentence}. {second_sentence}"
+        profile = candidate_raw.get("profile", {})
+        skills = candidate_raw.get("skills", [])
+        redrob = candidate_raw.get("redrob_signals", {})
 
-    def save_results(self, results: List[Dict], output_dir: str = './ranking_output'):
+        title = parsed_profile.current_title or parsed_profile.most_recent_role_title
+        company = parsed_profile.current_company or parsed_profile.most_recent_role_company
+        years = parsed_profile.years_experience
+
+        # Build fact-based sentence 1: title + years + company
+        if years and title and company:
+            s1 = f"{years:.0f}yr {title} at {company}"
+        elif years and title:
+            s1 = f"{years:.0f}yr {title}"
+        else:
+            s1 = title or "Candidate"
+
+        # Build sentence 2: top signals
+        signals = []
+
+        if components.assessment_score >= 0.6:
+            top_assessed = sorted(
+                redrob.get("skill_assessment_scores", {}).items(),
+                key=lambda x: x[1], reverse=True
+            )[:2]
+            if top_assessed:
+                assessed_str = ", ".join(
+                    f"{k}={v:.0f}" for k, v in top_assessed
+                )
+                signals.append(f"verified assessments: {assessed_str}")
+
+        if components.skill_trust_score >= 0.6:
+            trusted = sorted(
+                parsed_profile.top_skill_trust_scores.items(),
+                key=lambda x: x[1], reverse=True
+            )[:3]
+            if trusted:
+                signals.append(
+                    "strong: " + ", ".join(k for k, v in trusted if v >= 0.5)
+                )
+
+        if components.title_relevance >= 0.8:
+            signals.append("direct title match")
+        elif components.title_relevance == 0.0:
+            signals.append("title mismatch — ranked on verified skills only")
+
+        edu = parsed_profile.education_tier
+        if edu == "tier_1":
+            signals.append("tier-1 education")
+
+        if parsed_profile.interview_completion_rate < 0.5:
+            signals.append(
+                f"ghost risk: {parsed_profile.interview_completion_rate:.0%} interview completion"
+            )
+
+        s2 = "; ".join(signals[:3]) + "." if signals else "Technical fit to JD."
+
+        return f"{s1}. {s2}"
+
+    def save_results(self, results: List[Dict], output_dir: str = None):
         """
         Phase 7: Save ranking results with tie-breaking compliance.
         
@@ -597,6 +622,11 @@ class OptimizedRankingEngine:
         
         import pandas as pd
         
+        if output_dir is None:
+            output_dir = Path(__file__).resolve().parents[2] / 'ranking_output'
+        else:
+            output_dir = Path(output_dir)
+
         os.makedirs(output_dir, exist_ok=True)
         
         # CSV
