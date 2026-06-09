@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_CANDIDATES="$ROOT/[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl"
+DEFAULT_CANDIDATES="$ROOT/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl"
 DEFAULT_OUTPUT_DIR="$ROOT/ranking_output"
 DEFAULT_LOG="$ROOT/ranking_run.log"
 

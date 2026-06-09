@@ -246,13 +246,22 @@ class EmbeddingPrecomputer:
         all_embeddings = []
         
         for i in range(0, len(texts), batch_size):
+            print(f"Starting batch {i//batch_size} ({i}/{len(texts)})")
             batch_texts = texts[i:i + batch_size]
+            import psutil
+            import os
+
+            print(
+                f"RAM before encode: "
+                f"{psutil.Process(os.getpid()).memory_info().rss / 1024**3:.2f} GB"
+            )
             batch_embeddings = self.model.encode(
                 batch_texts,
                 batch_size=batch_size,
                 convert_to_numpy=True,
                 show_progress_bar=False
             )
+            print(f"Finished batch {i//batch_size}")
             
             # Normalize for cosine similarity (PHASE 6: use float32 consistently)
             batch_embeddings = batch_embeddings.astype('float32', copy=False)

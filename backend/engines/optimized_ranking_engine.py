@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
 import os
-import faiss
 import torch
 
 from .candidate_profile_parser import CandidateProfileParser, ParsedProfile
@@ -28,6 +27,8 @@ from .advanced_scoring_components import (
     CareerTrajectoryAnalyzer, ProductCompanyScorer, RetrievalDepthScorer,
     EvaluationFrameworkScorer, HoneypotDetector
 )
+
+import faiss
 
 # Configure FAISS threading (torch threading already configured in embedding_precompute)
 faiss.omp_set_num_threads(_CPU_COUNT)
@@ -429,10 +430,14 @@ class OptimizedRankingEngine:
         print(f"\n[Stage 5] Finalizing top {top_k}...")
         t0 = datetime.now()
         
-        # Phase 7: Apply deterministic tie-breaking before ranking
-        # Sort by: (score DESC, candidate_id ASC)
+        # Phase 7: Apply deterministic tie-breaking before ranking.
+        # Note: challenge validator compares scores rounded to 4 decimals,
+        # so sort by the rounded score first, then candidate_id ascending.
+        for scored in scored_candidates:
+            scored['rounded_score'] = round(scored['final_score'], 4)
+
         scored_candidates.sort(
-            key=lambda x: (-x['final_score'], x['candidate_id'])
+            key=lambda x: (-x['rounded_score'], x['candidate_id'])
         )
         top_candidates = scored_candidates[:top_k]
         

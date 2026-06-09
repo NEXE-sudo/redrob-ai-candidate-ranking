@@ -16,15 +16,19 @@ class ParsedProfile:
     years_experience: float
     current_title: str
     current_company: str
+    summary: str
+    headline: str
     company_type: str  # "product", "consulting", "startup", "other"
     is_consulting_only: bool
     profile_completeness: float
     skill_names: List[str]
     skill_counts: int
     skill_endorsements_mean: float
+    career_history: List[Dict[str, Any]]
     career_depth_months: Dict[str, int]
     timeline_issues: List[str]
     most_recent_role_title: str
+    total_years_experience: float
     most_recent_role_company: str
     most_recent_role_ended_months_ago: float
     most_recent_company_size: str
@@ -110,8 +114,10 @@ class CandidateProfileParser:
         # Basic info
         candidate_id = candidate_raw['candidate_id']
         years_experience = profile['years_of_experience']
-        current_title = profile['current_title']
-        current_company = profile['current_company']
+        current_title = profile.get('current_title', '')
+        current_company = profile.get('current_company', '')
+        summary = profile.get('summary', '')
+        headline = profile.get('headline', '')
         
         # Determine company type
         company_type, is_consulting_only = self._classify_company(career_history)
@@ -212,6 +218,7 @@ class CandidateProfileParser:
             skill_names=skill_names,
             skill_counts=skill_counts,
             skill_endorsements_mean=skill_endorsements_mean,
+            career_history=career_history,
             career_depth_months=career_depth_months,
             timeline_issues=timeline_issues,
             most_recent_role_title=most_recent_role_title,
@@ -227,6 +234,9 @@ class CandidateProfileParser:
             interview_completion_rate=interview_completion_rate,
             offer_acceptance_rate=offer_acceptance_rate,
             avg_response_time_hours=avg_response_time_hours,
+            total_years_experience=years_experience,
+            summary=summary,
+            headline=headline,
             top_skill_trust_scores=top_skill_trust_scores
         )
     
