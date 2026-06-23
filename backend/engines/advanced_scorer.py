@@ -65,8 +65,8 @@ class AdvancedScorer:
             candidate_raw['profile'].get('headline', '').lower()
         )
         
-        for role in candidate_raw['career_history']:
-            all_text += ' ' + role['title'].lower() + ' ' + role['description'].lower()
+        for role in candidate_raw.get('career_history', []):
+            all_text += ' ' + role.get('title', '').lower() + ' ' + role.get('description', '').lower()
         
         # Check for evaluation keywords
         eval_count = sum(1 for keyword in self.EVAL_KEYWORDS if keyword in all_text)
@@ -128,11 +128,11 @@ class AdvancedScorer:
         small_company_count = 0
         product_ownership_roles = 0
         
-        for role in candidate_raw['career_history']:
-            title = role['title'].lower()
-            company = role['company'].lower()
-            description = role['description'].lower()
-            company_size = role['company_size']
+        for role in candidate_raw.get('career_history', []):
+            title = role.get('title', '').lower()
+            company = role.get('company', '').lower()
+            description = role.get('description', '').lower()
+            company_size = role.get('company_size', '')
             
             # Check for startup keywords
             if any(keyword in company or keyword in title 
@@ -167,10 +167,11 @@ class AdvancedScorer:
             score += 0.05
         
         # Bonus for current startup role
-        if candidate_raw['career_history']:
-            current_role = candidate_raw['career_history'][0]
-            if current_role['is_current'] and any(
-                keyword in current_role['company'].lower() 
+        career_history = candidate_raw.get('career_history', [])
+        if career_history:
+            current_role = career_history[0]
+            if current_role.get('is_current') and any(
+                keyword in current_role.get('company', '').lower() 
                 for keyword in self.STARTUP_KEYWORDS
             ):
                 score += 0.2

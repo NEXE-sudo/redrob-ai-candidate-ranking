@@ -5,16 +5,25 @@ Uses Sentence Transformers for embedding generation.
 OPTIMIZATIONS: BM25 vectorization, FAISS thread config
 """
 
-import faiss
 import numpy as np
 from typing import List, Tuple
 
 # Import threading configuration
 try:
     from .embedding_precompute import _CPU_COUNT
-    faiss.omp_set_num_threads(_CPU_COUNT)
-except:
-    pass  # Fallback if imports fail
+except Exception:
+    _CPU_COUNT = None
+
+
+def _get_faiss():
+    """Lazily import FAISS to avoid import-time interaction issues."""
+    try:
+        import faiss
+    except ImportError as e:
+        raise ImportError(
+            "FAISS is required for embedding retrieval. Install with: pip install faiss-cpu"
+        ) from e
+    return faiss
 
 
 # NOTE: EmbeddingRetriever is superseded by EmbeddingPrecomputer (embedding_precompute.py)
@@ -88,13 +97,14 @@ class BM25Retriever:
 class EmbeddingRetriever:
     """FAISS-based embedding retrieval for candidates"""
     
-    def __init__(self, model_name: str = 'BAAI/bge-small-en-v1.5'):
+    def __init__(self, model_name: str = 'BAAI/bge-large-en-v1.5'):
         from sentence_transformers import SentenceTransformer
         self.model_name = model_name
         self.SentenceTransformer = SentenceTransformer
         self.model = None
         self.candidate_embeddings = None
         self.candidate_ids = None
+        self.index = None
         
     def load_model(self):
         if self.model is None:
@@ -102,6 +112,9 @@ class EmbeddingRetriever:
             print(f"Loaded embedding model: {self.model_name}")
 
     def build_index(self, candidates: List[dict], batch_size: int = 64, use_cache: bool = True) -> Tuple[np.ndarray, List[str]]:
+        if self.model is None:
+            self.load_model()
+
         self.candidate_ids = [c['candidate_id'] for c in candidates]
         texts = []
         for candidate in candidates:
@@ -111,7 +124,7 @@ class EmbeddingRetriever:
             text_parts.append(profile.get('headline', ''))
             text_parts.append(profile.get('current_title', ''))
             skills = candidate.get('skills', [])
-            text_parts.append(' '.join([s['name'] for s in skills[:20]]))
+            text_parts.append(' '.join([s.get('name', '') for s in skills[:20]]))
             career = candidate.get('career_history', [])
             for role in career[:2]:
                 text_parts.append(role.get('title', ''))
@@ -122,6 +135,10 @@ class EmbeddingRetriever:
         embeddings = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
         self.candidate_embeddings = embeddings / (np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8)
         self.candidate_embeddings = self.candidate_embeddings.astype('float32', copy=False)
+
+        faiss = _get_faiss()
+        if _CPU_COUNT is not None:
+            faiss.omp_set_num_threads(_CPU_COUNT)
         self.index = faiss.IndexFlatIP(self.candidate_embeddings.shape[1])
         self.index.add(self.candidate_embeddings)
         return self.candidate_embeddings, self.candidate_ids
@@ -129,7 +146,9 @@ class EmbeddingRetriever:
     def retrieve(self, query_text: str, top_k: int = 500) -> Tuple[List[str], List[float]]:
         if self.candidate_embeddings is None:
             raise ValueError("Index not built.")
-            
+        if self.model is None:
+            self.load_model()
+
         query_embedding = self.model.encode([query_text], convert_to_numpy=True, show_progress_bar=False)[0]
         query_embedding = query_embedding / (np.linalg.norm(query_embedding) + 1e-8)
         

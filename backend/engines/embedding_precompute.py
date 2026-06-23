@@ -4,6 +4,7 @@ Pre-computes and caches embeddings for all candidates to enable fast retrieval.
 Run this ONCE before ranking; subsequent ranking uses cached embeddings.
 """
 
+import argparse
 import json
 import numpy as np
 import os
@@ -26,15 +27,16 @@ def _configure_threading_and_environment():
     
     # PyTorch threading configuration
     torch.set_num_threads(cpu_count)
-    torch.set_num_interop_threads(min(8, cpu_count))
-    
+    torch.set_num_interop_threads(cpu_count)
+
     # Set environment variables for NumPy, SciPy, scikit-learn
     os.environ['OMP_NUM_THREADS'] = str(cpu_count)
     os.environ['MKL_NUM_THREADS'] = str(cpu_count)
     os.environ['NUMEXPR_NUM_THREADS'] = str(cpu_count)
-    
-    # Disable Python GIL to improve threading performance
     os.environ['OPENBLAS_NUM_THREADS'] = str(cpu_count)
+    os.environ['OPENBLAS_MAIN_FREE'] = '1'
+    os.environ['MKL_DYNAMIC'] = 'FALSE'
+    # Disable Python GIL to improve threading performance
     
     return cpu_count
 
@@ -62,22 +64,23 @@ def _calculate_adaptive_batch_size(embedding_dim: int = 384, available_ram_gb: f
     
     For float32 embeddings:
     - Each embedding: embedding_dim * 4 bytes
-    - Batch overhead: ~50% more for tokenization, model intermediate states
-    - Target: Use 40% of available RAM for batch processing
-    
+    - Batch overhead: ~150% more for tokenization, model intermediate states
+    - Target: Use 80% of available RAM for batch processing
+
     PHASE 2 TARGETS:
     - RAM < 6 GB: batch_size = 128
     - RAM 6-10 GB: batch_size = 256
-    - RAM > 10 GB: batch_size = 512
+    - RAM 10-16 GB: batch_size = 512
+    - RAM > 16 GB: batch_size = 1024
     """
     if available_ram_gb is None:
         available_ram_gb = _get_available_ram_gb()
     
     # Bytes per embedding with overhead
-    bytes_per_embedding = embedding_dim * 4 * 1.5  # float32 + 50% overhead
+    bytes_per_embedding = embedding_dim * 4 * 2.5  # float32 + 150% overhead
     
-    # Target 40% of available RAM
-    target_bytes = available_ram_gb * (1024 ** 3) * 0.40
+    # Target 80% of available RAM to maximize throughput on available hardware
+    target_bytes = available_ram_gb * (1024 ** 3) * 0.80
     
     # Calculate batch size
     adaptive_batch_size = max(32, int(target_bytes / bytes_per_embedding))
@@ -87,10 +90,65 @@ def _calculate_adaptive_batch_size(embedding_dim: int = 384, available_ram_gb: f
         adaptive_batch_size = min(adaptive_batch_size, 128)
     elif available_ram_gb < 10:
         adaptive_batch_size = min(adaptive_batch_size, 256)
-    else:
+    elif available_ram_gb < 16:
         adaptive_batch_size = min(adaptive_batch_size, 512)
+    else:
+        adaptive_batch_size = min(adaptive_batch_size, 1024)
     
     return adaptive_batch_size
+
+
+_MODEL_EMBEDDING_DIMS = {
+    'BAAI/bge-large-en-v1.5': 1024,
+    'BAAI/bge-small-en-v1.5': 384,
+}
+
+
+def _resolve_local_model_dir(model_name: str) -> Path:
+    """Resolve a local model cache directory from a model name."""
+    model_dir = model_name.split('/', 1)[1] if '/' in model_name else model_name
+    return Path(__file__).resolve().parents[1] / 'models' / model_dir
+
+
+def _infer_embedding_dim(model_name: str, default: int = 384) -> int:
+    """Infer the expected embedding dimension for a given model."""
+    return _MODEL_EMBEDDING_DIMS.get(model_name, default)
+
+
+def download_models(models_dir: Path = None):
+    """Download required local models for offline use."""
+    from sentence_transformers import SentenceTransformer, CrossEncoder
+
+    if models_dir is None:
+        models_dir = Path(__file__).resolve().parents[1] / 'models'
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    embedding_model_name = 'BAAI/bge-large-en-v1.5'
+    cross_encoder_name = 'cross-encoder/ms-marco-MiniLM-L-12-v2'
+
+    embedding_local_path = models_dir / 'bge-large-en-v1.5'
+    cross_encoder_local_path = models_dir / 'cross-encoder-ms-marco-MiniLM-L-12-v2'
+
+    if not embedding_local_path.exists():
+        print(f"Downloading embedding model to {embedding_local_path}...")
+        model = SentenceTransformer(embedding_model_name)
+        model.save(str(embedding_local_path))
+        print(f"Saved embedding model to {embedding_local_path}")
+    else:
+        print(f"Embedding model already cached at {embedding_local_path}")
+
+    if not cross_encoder_local_path.exists():
+        print(f"Downloading cross-encoder model to {cross_encoder_local_path}...")
+        ce = CrossEncoder(cross_encoder_name)
+        ce.save(str(cross_encoder_local_path))
+        print(f"Saved cross-encoder model to {cross_encoder_local_path}")
+    else:
+        print(f"Cross-encoder model already cached at {cross_encoder_local_path}")
+
+    return {
+        'embedding_model': str(embedding_local_path),
+        'cross_encoder_model': str(cross_encoder_local_path)
+    }
 
 
 class EmbeddingPrecomputer:
@@ -98,12 +156,16 @@ class EmbeddingPrecomputer:
     
     def __init__(
         self,
-        model_name: str = 'BAAI/bge-small-en-v1.5',
-        embedding_dim: int = 384,
+        model_name: str = 'BAAI/bge-large-en-v1.5',
+        embedding_dim: int | None = None,
         cache_dir: str = './embeddings_cache'
     ):
         self.model_name = model_name
-        self.embedding_dim = embedding_dim
+        self.embedding_dim = (
+            embedding_dim
+            if embedding_dim is not None
+            else _infer_embedding_dim(model_name)
+        )
         self.project_root = Path(__file__).resolve().parents[2]
         self.engine_dir = Path(__file__).resolve().parents[1]
         self.cache_dir = self._resolve_cache_dir(cache_dir)
@@ -162,8 +224,16 @@ class EmbeddingPrecomputer:
     def load_model(self):
         """Load Sentence Transformer model"""
         if self.model is None:
-            print(f"Loading model: {self.model_name}")
-            self.model = SentenceTransformer(self.model_name, device='cpu')
+            local_path = _resolve_local_model_dir(self.model_name)
+            if local_path.exists():
+                print(f"Loading model from local path: {local_path}")
+                self.model = SentenceTransformer(str(local_path), device='cpu')
+            else:
+                raise FileNotFoundError(
+                    f"Local embedding model not found at {local_path}. "
+                    "Offline mode requires the model cached locally. "
+                    "Run backend/scripts/download_models.py first."
+                )
             print("Model loaded successfully")
     
     def precompute_embeddings(
@@ -338,6 +408,15 @@ class EmbeddingPrecomputer:
         with open(metadata_path, 'r') as f:
             metadata = json.load(f)
         
+        if metadata.get('model_name') != self.model_name:
+            raise ValueError(
+                f"Precomputed embeddings were built with '{metadata.get('model_name')}' "
+                f"but current model is '{self.model_name}'. "
+                "Delete or rebuild the cache to continue."
+            )
+
+        self.embedding_dim = int(metadata['embedding_dim'])
+
         # PHASE 3-4: Validate that candidate counts match
         if len(candidate_ids) != metadata['total_candidates']:
             raise ValueError(
@@ -399,7 +478,12 @@ class EmbeddingPrecomputer:
                 raise RuntimeError(f"Cache save failed: required file not found: {path}")
 
 
-def precompute_script(candidates_file: str):
+def precompute_script(
+    candidates_file: str,
+    output_prefix: str = 'precomputed_embeddings',
+    batch_size: int = None,
+    max_candidates: int = None
+):
     """Standalone script to precompute embeddings"""
     
     print("\n" + "="*60)
@@ -412,8 +496,9 @@ def precompute_script(candidates_file: str):
     try:
         metadata = precomputer.precompute_embeddings(
             jsonl_path=candidates_file,
-            output_prefix='precomputed_embeddings',
-            batch_size=None
+            output_prefix=output_prefix,
+            batch_size=batch_size,
+            max_candidates=max_candidates
         )
         
         print("\n" + "="*60)
@@ -432,10 +517,49 @@ def precompute_script(candidates_file: str):
 
 if __name__ == '__main__':
     import sys
-    
-    if len(sys.argv) < 2:
-        print("Usage: python3 precompute_embeddings.py <path_to_candidates.jsonl>")
-        sys.exit(1)
-    
-    candidates_file = sys.argv[1]
-    sys.exit(precompute_script(candidates_file))
+
+    parser = argparse.ArgumentParser(
+        description='Precompute embeddings and optionally download required local models.'
+    )
+    parser.add_argument(
+        '--download-models',
+        action='store_true',
+        help='Download embedding and cross-encoder models locally and exit.'
+    )
+    parser.add_argument(
+        '--output-prefix',
+        default='precomputed_embeddings',
+        help='Prefix for cache output files.'
+    )
+    parser.add_argument(
+        '--batch-size',
+        type=int,
+        default=None,
+        help='Override adaptive batch size.'
+    )
+    parser.add_argument(
+        '--max-candidates',
+        type=int,
+        default=None,
+        help='Limit number of candidates to precompute.'
+    )
+    parser.add_argument(
+        'candidates_file',
+        nargs='?', 
+        help='Path to candidates.jsonl (required unless --download-models is used)'
+    )
+    args = parser.parse_args()
+
+    if args.download_models:
+        download_models(models_dir=Path(__file__).resolve().parents[1] / 'models')
+        sys.exit(0)
+
+    if not args.candidates_file:
+        parser.error('the following arguments are required: candidates_file')
+
+    sys.exit(precompute_script(
+        args.candidates_file,
+        output_prefix=args.output_prefix,
+        batch_size=args.batch_size,
+        max_candidates=args.max_candidates
+    ))

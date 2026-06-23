@@ -17,8 +17,8 @@ from engines.embedding_retrieval import EmbeddingRetriever, BM25Retriever
 
 def load_sample_candidates(num_samples=10):
     """Load first N candidates from JSONL for testing"""
-    data_dir = Path("/home/NEXE/projects/Redrob hackathon/[PUB] India_runs_data_and_ai_challenge")
-    data_dir = data_dir / "[PUB] India_runs_data_and_ai_challenge" / "India_runs_data_and_ai_challenge"
+    repo_root = Path(__file__).resolve().parent
+    data_dir = repo_root / "[PUB] India_runs_data_and_ai_challenge" / "India_runs_data_and_ai_challenge"
     candidates_file = data_dir / "candidates.jsonl"
     
     candidates = []

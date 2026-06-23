@@ -42,15 +42,19 @@ class RecruiterCentricJDParser:
         'startup experience', 'product company', 'recommendation systems',
         'search systems', 'marketplace', 'learning-to-rank', 'ltr',
         'fine-tuning', 'lora', 'qlora', 'llm', 'rag',
-        'production ml', 'shipped', 'deployed'
+        'production ml', 'shipped', 'deployed', 'recruiter workflows',
+        'evaluation infrastructure', 'offline benchmarks', 'a/b test',
+        'feedback loops'
     }
     
     # Red flags that penalize candidates
     NEGATIVE_SIGNALS = {
-        'consulting-only', 'consulting career', 'pure research',
-        'academic research', 'inactive', 'passive', 'no activity',
-        'long notice period', '90 days', 'title chasing',
-        'framework only', 'no production', 'no shipped'
+        'consulting-only', 'consulting career', 'consulting firms',
+        'consulting firms only', 'only worked at consulting',
+        'pure research', 'academic research', 'inactive', 'passive',
+        'no activity', 'long notice period', '90 days', 'title chasing',
+        'framework only', 'no production', 'no shipped', 'research-only',
+        'hidden title', 'title chasers'
     }
     
     # Experience expectations
@@ -145,10 +149,11 @@ class RecruiterCentricJDParser:
         """Extract location preferences"""
         locations = []
         common_locs = [
+            'pune', 'noida', 'mumbai', 'hyderabad', 'delhi', 'bangalore',
+            'bengaluru', 'india', 'remote', 'hybrid',
             'san francisco', 'sf', 'bay area',
             'new york', 'nyc',
             'seattle',
-            'remote', 'hybrid',
             'london', 'singapore', 'toronto'
         ]
         for loc in common_locs:
@@ -158,7 +163,10 @@ class RecruiterCentricJDParser:
     
     def _detect_relocation_required(self, text: str) -> bool:
         """Detect if relocation is required"""
-        keywords = ['relocation required', 'must relocate', 'willing to relocate']
+        keywords = [
+            'relocation required', 'must relocate', 'willing to relocate',
+            'open to relocation', 'open to relocate', 'relocate if needed'
+        ]
         return any(kw in text for kw in keywords)
     
     def _detect_hands_on_coding(self, text: str) -> bool:

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
 import os
+import math
 import torch
 
 from .candidate_profile_parser import CandidateProfileParser, ParsedProfile
@@ -41,7 +42,7 @@ class OptimizedRankingEngine:
         self,
         embeddings_cache_dir: str = './embeddings_cache',
         use_precomputed_embeddings: bool = True,
-        embedding_model: str = 'BAAI/bge-small-en-v1.5',  # Phase 10: Configurable
+        embedding_model: str = 'BAAI/bge-large-en-v1.5',  # Phase 10: Configurable
         enable_cross_encoder: bool = True,  # Phase 1: Toggle cross-encoder
         enable_honeypot_detection: bool = True  # Phase 4: Toggle honeypot detection
     ):
@@ -360,13 +361,15 @@ class OptimizedRankingEngine:
                 parsed = self.parsed_profiles[candidate_id]
             
             # Phase 3: Score with all components
-            semantic_sim = faiss_score_map.get(candidate_id, 0.0)
+            raw_sem = faiss_score_map.get(candidate_id, 0.0)
+            semantic_sim = 1.0 / (1.0 + math.exp(-raw_sem))
             components = self.feature_scorer.score_candidate(
                 candidate,
                 parsed,
                 semantic_similarity=semantic_sim,
                 advanced_scorer=self.advanced_scorer,
-                jd_skill_keywords=self.jd_skill_keywords
+                jd_skill_keywords=self.jd_skill_keywords,
+                requirement_profile=self.requirement_profile
             )
             
             # Phase 3: Add new component scores
@@ -380,29 +383,13 @@ class OptimizedRankingEngine:
             if self.honeypot_detector:
                 risk_score = self.honeypot_detector.calculate_risk_score(parsed, candidate)
                 honeypot_penalty = self.honeypot_detector.get_penalty_multiplier(risk_score)
-            
+
             # Use ScoringComponents.final_score which already incorporates
             # the new weights, behavioral multiplier, and profile quality.
             # Do NOT recompute weights here — trust the dataclass formula.
-            final_score = components.final_score
-
-            # Apply honeypot penalty on top
-            if self.honeypot_detector:
-                risk_score = self.honeypot_detector.calculate_risk_score(parsed, candidate)
-                honeypot_penalty = self.honeypot_detector.get_penalty_multiplier(risk_score)
-            else:
-                honeypot_penalty = 1.0
-
-            final_score = final_score * honeypot_penalty
+            final_score = components.final_score * honeypot_penalty
 
             # Apply additional disqualifiers (consulting-only etc.)
-            final_score = self.feature_scorer.apply_disqualifying_factors(
-                final_score,
-                parsed,
-                candidate
-            )
-            
-            # Apply additional disqualifiers
             final_score = self.feature_scorer.apply_disqualifying_factors(
                 final_score,
                 parsed,
@@ -425,7 +412,14 @@ class OptimizedRankingEngine:
         
         stage_timings['feature_scoring'] = (datetime.now() - t0).total_seconds()
         print(f"  ✓ Scored {len(scored_candidates)} candidates ({stage_timings['feature_scoring']:.1f}s)")
-        
+
+        # Normalize final scores across all scored candidates so top candidate is 1.0
+        if scored_candidates:
+            max_raw = max(s['final_score'] for s in scored_candidates)
+            if max_raw > 0:
+                for s in scored_candidates:
+                    s['final_score'] = s['final_score'] / max_raw
+
         # Stage 5: Sort and finalize
         print(f"\n[Stage 5] Finalizing top {top_k}...")
         t0 = datetime.now()

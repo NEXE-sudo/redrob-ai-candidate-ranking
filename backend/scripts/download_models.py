@@ -6,20 +6,47 @@ Run this ONCE before submission. Requires network access.
 Usage: python scripts/download_models.py
 """
 from pathlib import Path
-from sentence_transformers import SentenceTransformer, CrossEncoder
 
 MODELS_DIR = Path(__file__).parent.parent / "models"
-MODELS_DIR.mkdir(exist_ok=True)
 
-print("Downloading BGE embedding model...")
-model = SentenceTransformer('BAAI/bge-small-en-v1.5')
-model.save(str(MODELS_DIR / "bge-small-en-v1.5"))
-print("  ✓ Saved to models/bge-small-en-v1.5")
 
-print("Downloading cross-encoder model...")
-ce = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-ce.save(str(MODELS_DIR / "cross-encoder-ms-marco-MiniLM-L-6-v2"))
-print("  ✓ Saved to models/cross-encoder-ms-marco-MiniLM-L-6-v2")
+def download_models(models_dir: Path = None):
+    """Download embedding and cross-encoder models to a local models directory."""
+    from sentence_transformers import SentenceTransformer, CrossEncoder
 
-print("\nAll models downloaded. Add models/ to .gitignore if large.")
-print("Update embedding_precompute.py model_name to point to local path.")
+    if models_dir is None:
+        models_dir = MODELS_DIR
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    embedding_model_name = 'BAAI/bge-large-en-v1.5'
+    cross_encoder_model_name = 'cross-encoder/ms-marco-MiniLM-L-12-v2'
+
+    embedding_path = models_dir / 'bge-large-en-v1.5'
+    cross_encoder_path = models_dir / 'cross-encoder-ms-marco-MiniLM-L-12-v2'
+
+    if not embedding_path.exists():
+        print(f"Downloading embedding model to {embedding_path}...")
+        model = SentenceTransformer(embedding_model_name)
+        model.save(str(embedding_path))
+        print(f"  ✓ Saved to {embedding_path}")
+    else:
+        print(f"Embedding model already cached at {embedding_path}")
+
+    if not cross_encoder_path.exists():
+        print(f"Downloading cross-encoder model to {cross_encoder_path}...")
+        ce = CrossEncoder(cross_encoder_model_name)
+        ce.save(str(cross_encoder_path))
+        print(f"  ✓ Saved to {cross_encoder_path}")
+    else:
+        print(f"Cross-encoder model already cached at {cross_encoder_path}")
+
+    print("\nAll requested models are cached locally.")
+    print("Add models/ to .gitignore if desired.")
+    return {
+        'embedding_model': str(embedding_path),
+        'cross_encoder_model': str(cross_encoder_path)
+    }
+
+
+if __name__ == '__main__':
+    download_models()

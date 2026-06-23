@@ -10,6 +10,7 @@ This satisfies the competition requirement:
     reproduce_command: "python backend/rank.py --candidates ./candidates.jsonl --out ./submission.csv"
 """
 import argparse
+import json
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -27,6 +28,10 @@ def main():
     parser.add_argument(
         "--out", default=default_output_csv,
         help=f"Output CSV path (default: {default_output_csv})"
+    )
+    parser.add_argument(
+        "--download-models", action="store_true",
+        help="Download embedding and cross-encoder models locally and exit."
     )
     default_cache_dir = str(Path(__file__).resolve().parent / "embeddings_cache")
     parser.add_argument(
@@ -49,22 +54,47 @@ def main():
 
     cache_dir = Path(args.cache_dir)
     embeddings_file = cache_dir / "precomputed_embeddings_embeddings.npy"
+    metadata_file = cache_dir / "precomputed_embeddings_metadata.json"
 
-    if not args.skip_precompute and not embeddings_file.exists():
-        print("\n[Step 1/2] Precomputing embeddings (one-time setup)...")
-        precomputer = EmbeddingPrecomputer(cache_dir=str(cache_dir))
+    if args.download_models:
+        from scripts.download_models import download_models
+        download_models()
+        print("\n✓ Models downloaded locally. Exiting.")
+        sys.exit(0)
+
+    precomputer = EmbeddingPrecomputer(cache_dir=str(cache_dir))
+
+    def _cache_is_compatible() -> bool:
+        if not embeddings_file.exists() or not metadata_file.exists():
+            return False
+        try:
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+            return (
+                metadata.get('model_name') == precomputer.model_name
+                and metadata.get('embedding_dim') == precomputer.embedding_dim
+            )
+        except Exception:
+            return False
+
+    if not args.skip_precompute and not _cache_is_compatible():
+        if embeddings_file.exists():
+            print("\n[Step 1/2] Existing embeddings cache is incompatible or built with a different model. Recomputing embeddings...")
+        else:
+            print("\n[Step 1/2] Precomputing embeddings (one-time setup)...")
         precomputer.precompute_embeddings(
             jsonl_path=args.candidates,
             output_prefix="precomputed_embeddings"
         )
         print("[Step 1/2] ✓ Embeddings cached")
     else:
-        print("\n[Step 1/2] Embeddings cache found — skipping precomputation")
+        print("\n[Step 1/2] Embeddings cache found and compatible — skipping precomputation")
 
     print("\n[Step 2/2] Running ranking pipeline...")
     engine = OptimizedRankingEngine(
         embeddings_cache_dir=str(cache_dir),
         use_precomputed_embeddings=True,
+        embedding_model='BAAI/bge-large-en-v1.5',
         enable_cross_encoder=True,
         enable_honeypot_detection=True
     )
@@ -74,9 +104,9 @@ def main():
 
     results, _ = engine.rank_candidates_fast(
         top_k=100,
-        bm25_top_k=3000,
+        bm25_top_k=5000,
         faiss_top_k=1000,
-        cross_encoder_top_k=250
+        cross_encoder_top_k=1000
     )
 
     out_path = Path(args.out)

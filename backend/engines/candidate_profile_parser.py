@@ -75,7 +75,9 @@ class CandidateProfileParser:
     # Engineering-related titles
     ENGINEERING_TITLES = {
         'engineer', 'ml engineer', 'ai engineer', 'data engineer', 'ml researcher',
-        'ai researcher', 'scientist', 'technical lead', 'tech lead', 'architect'
+        'ai researcher', 'scientist', 'technical lead', 'tech lead', 'architect',
+        'data scientist', 'applied scientist', 'research scientist',
+        'research engineer', 'applied researcher', 'machine learning', 'deep learning'
     }
     
     # Skills to look for
@@ -106,14 +108,14 @@ class CandidateProfileParser:
         if reference_date is None:
             reference_date = datetime.now()
         
-        profile = candidate_raw['profile']
-        career_history = candidate_raw['career_history']
-        skills = candidate_raw['skills']
-        redrob_signals = candidate_raw['redrob_signals']
+        profile = candidate_raw.get('profile', {})
+        career_history = candidate_raw.get('career_history', [])
+        skills = candidate_raw.get('skills', [])
+        redrob_signals = candidate_raw.get('redrob_signals', {})
         
         # Basic info
-        candidate_id = candidate_raw['candidate_id']
-        years_experience = profile['years_of_experience']
+        candidate_id = candidate_raw.get('candidate_id', '')
+        years_experience = profile.get('years_of_experience', 0.0)
         current_title = profile.get('current_title', '')
         current_company = profile.get('current_company', '')
         summary = profile.get('summary', '')
@@ -123,7 +125,7 @@ class CandidateProfileParser:
         company_type, is_consulting_only = self._classify_company(career_history)
         
         # Profile completeness
-        profile_completeness = redrob_signals['profile_completeness_score']
+        profile_completeness = redrob_signals.get('profile_completeness_score', 0.0)
         
         # Skill analysis
         skill_names = [s['name'] for s in skills]
@@ -139,20 +141,25 @@ class CandidateProfileParser:
         
         # Most recent role
         most_recent_role = career_history[0] if career_history else None
-        most_recent_role_title = most_recent_role['title'] if most_recent_role else ""
-        most_recent_role_company = most_recent_role['company'] if most_recent_role else ""
-        most_recent_company_size = most_recent_role['company_size'] if most_recent_role else ""
+        most_recent_role_title = most_recent_role.get('title', '') if most_recent_role else ""
+        most_recent_role_company = most_recent_role.get('company', '') if most_recent_role else ""
+        most_recent_company_size = most_recent_role.get('company_size', '') if most_recent_role else ""
         
         # Calculate months since last role ended (or current if still in role)
-        if most_recent_role['is_current']:
+        if most_recent_role and most_recent_role.get('is_current'):
             most_recent_role_ended_months_ago = 0.0
-        else:
-            end_date_str = most_recent_role['end_date']
+        elif most_recent_role:
+            end_date_str = most_recent_role.get('end_date', '')
             if end_date_str:
-                end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
-                most_recent_role_ended_months_ago = (reference_date - end_date).days / 30.44
+                try:
+                    end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+                    most_recent_role_ended_months_ago = (reference_date - end_date).days / 30.44
+                except ValueError:
+                    most_recent_role_ended_months_ago = 999.0
             else:
-                most_recent_role_ended_months_ago = 999  # Unknown
+                most_recent_role_ended_months_ago = 999.0  # Unknown
+        else:
+            most_recent_role_ended_months_ago = 999.0
         
         # Years since last code (proxy: if title contains engineer and ended <18mo ago)
         is_engineer = any(eng_title in current_title.lower() for eng_title in self.ENGINEERING_TITLES)
@@ -162,8 +169,9 @@ class CandidateProfileParser:
             years_since_last_coding = 999.0  # Assume not coding
         
         # GitHub signal
-        has_github = redrob_signals['github_activity_score'] >= 0
-        github_activity_score = max(0, redrob_signals['github_activity_score'])
+        github_score = redrob_signals.get('github_activity_score', -1)
+        has_github = github_score >= 0
+        github_activity_score = max(0, github_score)
         
         # Education tier — take the highest tier found across all education entries
         # tier_1 > tier_2 > tier_3 > tier_4 > unknown
@@ -191,6 +199,11 @@ class CandidateProfileParser:
         raw_acceptance = redrob_signals.get("offer_acceptance_rate", -1)
         offer_acceptance_rate = raw_acceptance  # keep -1 as sentinel for no history
         avg_response_time_hours = redrob_signals.get("avg_response_time_hours", 24.0)
+
+        # GitHub signal
+        github_score = redrob_signals.get('github_activity_score', -1)
+        has_github = github_score >= 0
+        github_activity_score = max(0, github_score)
 
         # Skill trust scores — compute per skill
         # trust = proficiency_weight * 0.4 + duration_weight * 0.4 + endorsement_weight * 0.2
@@ -328,8 +341,8 @@ class CandidateProfileParser:
             next_role = sorted_history[i + 1]
             
             try:
-                current_end = current_role['end_date']
-                next_start = next_role['start_date']
+                current_end = current_role.get('end_date')
+                next_start = next_role.get('start_date')
                 
                 if current_end and next_start:
                     current_end_date = datetime.strptime(current_end, '%Y-%m-%d')
@@ -337,12 +350,16 @@ class CandidateProfileParser:
                     
                     # Check for overlap
                     if current_end_date > next_start_date:
-                        issues.append(f"Overlapping roles: {current_role['company']} ends after {next_role['company']} starts")
+                        issues.append(
+                            f"Overlapping roles: {current_role.get('company', '')} ends after {next_role.get('company', '')} starts"
+                        )
                     
                     # Check for large gaps
                     gap_days = (current_end_date - next_start_date).days
                     if gap_days > 365:
-                        issues.append(f"Large gap ({gap_days} days) between {current_role['company']} and {next_role['company']}")
+                        issues.append(
+                            f"Large gap ({gap_days} days) between {current_role.get('company', '')} and {next_role.get('company', '')}"
+                        )
             except (ValueError, TypeError):
                 issues.append(f"Could not parse dates for role at {current_role['company']}")
                 continue

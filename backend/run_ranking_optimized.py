@@ -82,7 +82,7 @@ def run_ranking_pipeline(candidates_file: str):
         print("\n[Init] Initializing enhanced ranking engine...")
         engine = OptimizedRankingEngine(
             use_precomputed_embeddings=True,
-            embedding_model='BAAI/bge-small-en-v1.5',  # Phase 10: Configurable
+            embedding_model='BAAI/bge-large-en-v1.5',  # Phase 10: Configurable
             enable_cross_encoder=True,  # Phase 1: Enable cross-encoder
             enable_honeypot_detection=True  # Phase 4: Enable honeypot detection
         )
@@ -96,9 +96,9 @@ def run_ranking_pipeline(candidates_file: str):
         print("[Rank] Executing enhanced multi-stage pipeline (Phases 1-10)...")
         results, scored_candidates = engine.rank_candidates_fast(
             top_k=100,
-            bm25_top_k=3000,  # Phase 1: Increased
+            bm25_top_k=5000,  # Phase 1: Increased
             faiss_top_k=1000,  # Phase 1: Increased  
-            cross_encoder_top_k=250  # Phase 1: Cross-encoder reranking
+            cross_encoder_top_k=1000  # Phase 1: Cross-encoder reranking
         )
         
         # Save results with Phase 7 tie-breaking compliance
@@ -147,6 +147,11 @@ def run_ranking_pipeline(candidates_file: str):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) > 1 and sys.argv[1] == '--download-models':
+        from scripts.download_models import download_models
+        download_models()
+        sys.exit(0)
+
     if len(sys.argv) < 2:
         print("Usage: python3 run_ranking_optimized.py <path_to_candidates.jsonl>")
         sys.exit(1)

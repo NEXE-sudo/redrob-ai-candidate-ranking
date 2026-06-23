@@ -8,12 +8,12 @@ from run_ranking_optimized import JD_TEXT
 
 import subprocess
 
-candidates_file = "/home/NEXE/projects/Redrob hackathon/[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl"
+candidates_file = sys.argv[1] if len(sys.argv) > 1 else './candidates.jsonl'
 
 cmd = [
-    "./venv_ranking/bin/python3", 
-    "benchmark_ranking.py", 
-    candidates_file, 
+    sys.executable,
+    str(Path(__file__).parent / 'benchmark_ranking.py'),
+    candidates_file,
     JD_TEXT
 ]
 

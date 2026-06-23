@@ -1,6 +1,6 @@
 """
 Cross-Encoder Reranking Module
-Uses cross-encoder/ms-marco-MiniLM-L-6-v2 for recruiter-style reranking.
+Uses cross-encoder/ms-marco-MiniLM-L-12-v2 for recruiter-style reranking.
 Reranks FAISS pool before feature scoring.
 """
 
@@ -20,16 +20,15 @@ def _get_cross_encoder():
         try:
             from sentence_transformers import CrossEncoder
             # Try local path first (for offline judging environments)
-            local_path = Path(__file__).parent.parent / "models" / "cross-encoder-ms-marco-MiniLM-L-6-v2"
+            local_path = Path(__file__).parent.parent / "models" / "cross-encoder-ms-marco-MiniLM-L-12-v2"
             if local_path.exists():
                 print(f"[CrossEncoder] Loading from local path: {local_path}")
                 _cross_encoder = CrossEncoder(str(local_path), device='cpu')
             else:
-                print("[CrossEncoder] Local model not found, loading from HuggingFace...")
-                print("[CrossEncoder] WARNING: This requires network access.")
-                print("[CrossEncoder] Run scripts/download_models.py to cache locally.")
-                _cross_encoder = CrossEncoder(
-                    'cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu'
+                raise FileNotFoundError(
+                    f"Local CrossEncoder model not found at {local_path}. "
+                    "Offline mode requires the cached CrossEncoder model. "
+                    "Run backend/scripts/download_models.py first."
                 )
             print("[CrossEncoder] Model loaded ✓")
         except ImportError:

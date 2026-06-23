@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .candidate_profile_parser import ParsedProfile, CandidateProfileParser
+from .recruiter_jd_parser import RequirementProfile
 
 
 @dataclass
@@ -49,7 +50,17 @@ class ScoringComponents:
         )
 
         final = base * self.profile_quality_multiplier * self.behavioral_multiplier
-        return min(max(final, 0.0), 1.0)
+        return max(final, 0.0)
+
+    @property
+    def behavioral_engagement(self) -> float:
+        """Alias for backward compatibility with tests and reporting."""
+        return self.behavioral_multiplier
+
+    @property
+    def profile_quality(self) -> float:
+        """Alias for backward compatibility with tests and reporting."""
+        return self.profile_quality_multiplier
 
 
 class FeatureScorer:
@@ -94,7 +105,8 @@ class FeatureScorer:
         semantic_similarity: float = 0.0,
         reference_date: datetime = None,
         advanced_scorer=None,
-        jd_skill_keywords: List[str] = None
+        jd_skill_keywords: List[str] = None,
+        requirement_profile: RequirementProfile = None
     ) -> ScoringComponents:
 
         if reference_date is None:
@@ -111,18 +123,18 @@ class FeatureScorer:
             candidate_raw, jd_skill_keywords
         )
         technical_relevance = self._score_technical_relevance(
-            candidate_raw, parsed_profile
+            candidate_raw, parsed_profile, requirement_profile
         )
         production_experience = self._score_production_experience(
-            parsed_profile, candidate_raw
+            parsed_profile, candidate_raw, requirement_profile
         )
         profile_quality_multiplier = self._score_profile_quality_multiplier(
-            parsed_profile, candidate_raw
+            parsed_profile, candidate_raw, requirement_profile
         )
-        experience_level_fit = self._score_experience_level_fit(parsed_profile)
+        experience_level_fit = self._score_experience_level_fit(parsed_profile, requirement_profile)
         education_score = self._score_education(parsed_profile)
         behavioral_multiplier = self._compute_behavioral_multiplier(
-            candidate_raw, parsed_profile, reference_date
+            candidate_raw, parsed_profile, reference_date, requirement_profile
         )
 
         evaluation_framework_score = 0.0
@@ -153,9 +165,10 @@ class FeatureScorer:
     def _score_technical_relevance(
         self,
         candidate_raw: Dict[str, Any],
-        parsed_profile: ParsedProfile
+        parsed_profile: ParsedProfile,
+        requirement_profile: RequirementProfile = None
     ) -> float:
-        """Score 1A + 1B + 1C: Keywords, Scale, Recency"""
+        """Score 1A + 1B + 1C: Keywords, Scale, JD fit, Recency"""
         
         # 1A: Keyword score
         keyword_score = self._keyword_match_score(candidate_raw, parsed_profile)
@@ -163,14 +176,169 @@ class FeatureScorer:
         # 1B: Scale signal
         scale_score = self._scale_signal_score(candidate_raw)
         
-        # Combine: 70% keywords + 30% scale
-        technical_base = keyword_score * 0.7 + scale_score * 0.3
+        if requirement_profile:
+            jd_requirement_score = self._score_jd_requirement_match(
+                candidate_raw, parsed_profile, requirement_profile
+            )
+            hands_on_score = self._score_hands_on_coding(
+                candidate_raw, parsed_profile, requirement_profile
+            )
+            leadership_score = self._score_leadership_fit(
+                candidate_raw, parsed_profile, requirement_profile
+            )
+            technical_base = (
+                keyword_score * 0.50 +
+                scale_score * 0.20 +
+                jd_requirement_score * 0.20 +
+                hands_on_score * 0.05 +
+                leadership_score * 0.05
+            )
+        else:
+            technical_base = keyword_score * 0.7 + scale_score * 0.3
         
         # 1C: Apply recency penalty/bonus
         recency_penalty = self._calculate_recency_penalty(parsed_profile)
         technical_relevance = technical_base * (1.0 - recency_penalty)
         
         return min(max(technical_relevance, 0.0), 1.0)
+
+    def _collect_candidate_text(
+        self,
+        candidate_raw: Dict[str, Any],
+        parsed_profile: ParsedProfile
+    ) -> str:
+        """Collect all candidate text fields for JD matching."""
+        profile_text = (
+            candidate_raw['profile'].get('summary', '').lower() + ' ' +
+            candidate_raw['profile'].get('headline', '').lower() + ' ' +
+            candidate_raw['profile'].get('current_title', '').lower() + ' ' +
+            candidate_raw['profile'].get('location', '').lower()
+        )
+        career_text = ' '.join([
+            role.get('title', '').lower() + ' ' + role.get('description', '').lower()
+            for role in candidate_raw.get('career_history', [])
+        ])
+        skill_text = ' '.join([s.get('name', '').lower() for s in candidate_raw.get('skills', [])])
+        return ' '.join([profile_text, career_text, skill_text]).strip()
+
+    def _score_jd_requirement_match(
+        self,
+        candidate_raw: Dict[str, Any],
+        parsed_profile: ParsedProfile,
+        requirement_profile: RequirementProfile
+    ) -> float:
+        """Score broad JD requirement fit using required/preferred terms."""
+        if not requirement_profile:
+            return 0.0
+
+        text = self._collect_candidate_text(candidate_raw, parsed_profile)
+        required_keywords = requirement_profile.required_keywords
+        preferred_keywords = requirement_profile.preferred_keywords
+
+        if required_keywords:
+            required_hits = sum(1 for kw in required_keywords if kw in text)
+            required_score = required_hits / len(required_keywords)
+        else:
+            required_score = 1.0
+
+        preferred_score = 0.0
+        if preferred_keywords:
+            preferred_hits = sum(1 for kw in preferred_keywords if kw in text)
+            preferred_score = preferred_hits / len(preferred_keywords)
+
+        negative_penalty = self._score_negative_jd_signals(
+            candidate_raw, parsed_profile, requirement_profile
+        )
+
+        score = required_score * 0.60 + preferred_score * 0.30
+        score = max(score - negative_penalty, 0.0)
+        return min(score, 1.0)
+
+    def _score_negative_jd_signals(
+        self,
+        candidate_raw: Dict[str, Any],
+        parsed_profile: ParsedProfile,
+        requirement_profile: RequirementProfile
+    ) -> float:
+        """Penalty for JD negative signals that match the candidate."""
+        penalty = 0.0
+        negatives = requirement_profile.negative_signals
+        redrob = candidate_raw.get('redrob_signals', {})
+
+        if not negatives:
+            return 0.0
+
+        if 'consulting-only' in negatives or 'consulting career' in negatives:
+            if parsed_profile.is_consulting_only:
+                penalty += 0.25
+
+        if 'pure research' in negatives or 'academic research' in negatives:
+            if self._has_research_without_production(candidate_raw):
+                penalty += 0.20
+
+        if 'no production' in negatives or 'no shipped' in negatives:
+            if not any(keyword in self._collect_candidate_text(candidate_raw, parsed_profile)
+                       for keyword in self.PRODUCTION_KEYWORDS):
+                penalty += 0.20
+
+        if 'long notice period' in negatives:
+            if redrob.get('notice_period_days', 0) > 60:
+                penalty += 0.15
+
+        return min(penalty, 0.5)
+
+    def _has_research_without_production(self, candidate_raw: Dict[str, Any]) -> bool:
+        career_text = ' '.join([
+            role.get('title', '').lower() + ' ' + role.get('description', '').lower()
+            for role in candidate_raw.get('career_history', [])
+        ])
+        if 'research' in career_text and not any(keyword in career_text for keyword in self.PRODUCTION_KEYWORDS):
+            return True
+        return False
+
+    def _score_hands_on_coding(
+        self,
+        candidate_raw: Dict[str, Any],
+        parsed_profile: ParsedProfile,
+        requirement_profile: RequirementProfile
+    ) -> float:
+        """Score a candidate's hands-on coding signal when the JD requires it."""
+        if not requirement_profile or not requirement_profile.hands_on_coding:
+            return 0.0
+
+        text = self._collect_candidate_text(candidate_raw, parsed_profile)
+        hands_on_terms = [
+            'hands-on', 'hands on', 'coding', 'implementation',
+            'write code', 'development', 'engineer', 'build', 'ship'
+        ]
+        if any(term in text for term in hands_on_terms):
+            return 1.0
+        return 0.55
+
+    def _score_leadership_fit(
+        self,
+        candidate_raw: Dict[str, Any],
+        parsed_profile: ParsedProfile,
+        requirement_profile: RequirementProfile
+    ) -> float:
+        """Score leadership signals when the JD explicitly requires them."""
+        if not requirement_profile or not requirement_profile.leadership_required:
+            return 0.0
+
+        title_text = (
+            parsed_profile.current_title + ' ' + parsed_profile.most_recent_role_title
+        ).lower()
+        leadership_terms = [
+            'lead', 'manage', 'mentor', 'leadership', 'team',
+            'principal', 'staff', 'head', 'director'
+        ]
+        if any(term in title_text for term in leadership_terms):
+            return 1.0
+
+        text = self._collect_candidate_text(candidate_raw, parsed_profile)
+        if any(term in text for term in leadership_terms):
+            return 0.85
+        return 0.60
 
     def _score_title_relevance(
         self,
@@ -263,7 +431,9 @@ class FeatureScorer:
         if matched_count == 0:
             return 0.0
 
-        return min(total_trust / 5.0, 1.0)
+        mean_trust = total_trust / matched_count
+        coverage_bonus = min(matched_count / 5.0, 1.0) * 0.2
+        return min(mean_trust * 0.8 + coverage_bonus, 1.0)
 
     def _score_skill_assessments(
         self,
@@ -290,7 +460,10 @@ class FeatureScorer:
                 relevant_scores.append(score / 100.0)
 
         if not relevant_scores:
-            return 0.0
+            all_scores = [v / 100.0 for v in assessments.values()]
+            if not all_scores:
+                return 0.0
+            return min(sum(all_scores) / len(all_scores) * 0.6, 1.0)
 
         return min(sum(relevant_scores) / len(relevant_scores), 1.0)
 
@@ -309,7 +482,8 @@ class FeatureScorer:
         self,
         candidate_raw: Dict[str, Any],
         parsed_profile: ParsedProfile,
-        reference_date: datetime
+        reference_date: datetime,
+        requirement_profile: RequirementProfile = None
     ) -> float:
         """
         Compute behavioral multiplier (0.4 to 1.3 range).
@@ -384,6 +558,36 @@ class FeatureScorer:
             multiplier *= 1.05
         elif saved >= 5:
             multiplier *= 1.02
+
+        views = redrob.get("profile_views_received_30d", 0)
+        if views >= 20:
+            multiplier *= 1.05
+        elif views >= 10:
+            multiplier *= 1.02
+
+        search_appearances = redrob.get("search_appearance_30d", 0)
+        if search_appearances >= 20:
+            multiplier *= 1.05
+        elif search_appearances >= 10:
+            multiplier *= 1.02
+
+        applications = redrob.get("applications_submitted_30d", 0)
+        if applications >= 3:
+            multiplier *= 1.04
+        elif applications >= 1:
+            multiplier *= 1.02
+
+        avg_response = redrob.get("avg_response_time_hours", 24)
+        if avg_response <= 24:
+            multiplier *= 1.05
+        elif avg_response <= 48:
+            multiplier *= 1.02
+        elif avg_response > 96:
+            multiplier *= 0.95
+
+        if requirement_profile and requirement_profile.relocation_required:
+            if redrob.get('willing_to_relocate', False):
+                multiplier *= 1.03
 
         return min(max(multiplier, 0.4), 1.3)
 
@@ -486,7 +690,8 @@ class FeatureScorer:
     def _score_production_experience(
         self,
         parsed_profile: ParsedProfile,
-        candidate_raw: Dict[str, Any]
+        candidate_raw: Dict[str, Any],
+        requirement_profile: RequirementProfile = None
     ) -> float:
         """Score based on career depth and consistency"""
         
@@ -538,7 +743,8 @@ class FeatureScorer:
     def _score_profile_quality_multiplier(
         self,
         parsed_profile: ParsedProfile,
-        candidate_raw: Dict[str, Any]
+        candidate_raw: Dict[str, Any],
+        requirement_profile: RequirementProfile = None
     ) -> float:
         """Score profile consistency, realism as MULTIPLIER (0.2 to 1.0)
         
@@ -575,7 +781,7 @@ class FeatureScorer:
             multiplier += 0.05  # Bonus for very complete
         
         # Verification signals - BONUS (trust signals)
-        redrob = candidate_raw['redrob_signals']
+        redrob = candidate_raw.get('redrob_signals', {})
         verify_count = sum([
             redrob.get('verified_email', False),
             redrob.get('verified_phone', False),
@@ -588,7 +794,16 @@ class FeatureScorer:
             multiplier += 0.05
         if redrob.get('recruiter_response_rate', 0) >= 0.5:
             multiplier += 0.04
-        
+
+        if requirement_profile and requirement_profile.relocation_required:
+            if redrob.get('willing_to_relocate', False):
+                multiplier += 0.04
+
+        if requirement_profile and requirement_profile.location_preferences:
+            preferred_mode = redrob.get('preferred_work_mode', '').lower()
+            if any(loc in preferred_mode for loc in requirement_profile.location_preferences):
+                multiplier += 0.03
+
         # Ensure multiplier is in valid range [0.2, 1.0]
         multiplier = min(max(multiplier, 0.2), 1.0)
         
@@ -613,23 +828,31 @@ class FeatureScorer:
         
         return suspicious_combos >= 3 and len(skill_names) > 30
     
-    def _score_experience_level_fit(self, parsed_profile: ParsedProfile) -> float:
-        """Score experience in target band (5-9 years)"""
+    def _score_experience_level_fit(
+        self,
+        parsed_profile: ParsedProfile,
+        requirement_profile: RequirementProfile = None
+    ) -> float:
+        """Score experience in a target band with JD context"""
         
         exp = parsed_profile.years_experience
-        
-        if exp < 3:
-            return 0.4  # Too junior
-        elif exp < 5:
-            return 0.7  # Below band
-        elif exp <= 9:
-            return 1.0  # Perfect band
-        elif exp <= 12:
-            return 0.95  # Slightly over
-        elif exp <= 15:
-            return 0.85  # Over band
+        if requirement_profile:
+            min_target = requirement_profile.target_experience_min
+            max_target = requirement_profile.target_experience_max
         else:
-            return 0.7  # Way over (stagnation risk)
+            min_target = 5
+            max_target = 9
+
+        if exp < min_target:
+            return max(0.3, 0.5 + 0.5 * (exp / max(min_target, 1)))
+        elif exp <= max_target:
+            return 1.0
+        elif exp <= max_target + 3:
+            return 0.95
+        elif exp <= max_target + 6:
+            return 0.85
+        else:
+            return 0.7
     
     def apply_disqualifying_factors(
         self,
@@ -641,12 +864,12 @@ class FeatureScorer:
         
         multiplier = 1.0
         
-        redrob = candidate_raw['redrob_signals']
+        redrob = candidate_raw.get('redrob_signals', {})
         
         # Pure research background (no production deployment)
         career_text = ' '.join([
             role['description'].lower()
-            for role in candidate_raw['career_history']
+            for role in candidate_raw.get('career_history', [])
         ])
         
         career_titles = [role['title'].lower() for role in candidate_raw['career_history']]

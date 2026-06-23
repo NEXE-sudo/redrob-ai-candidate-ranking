@@ -1,0 +1,355 @@
+﻿REDROB RANKING SYSTEM
+Complete Fix, Upgrade & Optimization Prompt
+India Runs Data & AI Challenge - Redrob Intelligent Candidate Ranking
+
+✅  SUBMISSION STATUS
+Passes all automated validator checks
+100 rows • No duplicates • Monotonic scores
+Tie-break correct (all 5 tie groups)⚠️  KNOWN ISSUES TO FIX
+3 critical bugs (double-penalty, logit overflow)
+4 high-severity scoring distortions
+8-way score ceiling collapse at 1.0000🚀  MODEL UPGRADES AVAILABLE
+3.25 GB / 5.0 GB budget after full upgrade
+bge-large (1024d) • L-12 cross-encoder
+Cross-encoder pool 250 → 1000 (free win)⏱  RUNTIME BUDGET (5 min limit)
+Current ranking: ~55-100 s
+After all upgrades: ~75-120 s
+Headroom: ~180-225 s remaining
+
+PART 1 - BUG FIXES (Apply Before Re-Running)
+
+  BUG #1 - CRITICAL   apply_disqualifying_factors() called twice
+File: backend/engines/optimized_ranking_engine.py  |  Method: rank_candidates_fast()
+Impact: Consulting-only candidates penalized at 0.01× instead of 0.1×. Research-only at 0.09× instead of 0.3×. Any candidate hitting multiple disqualifiers is practically zeroed out.
+
+The Problem
+Inside the candidate scoring loop, apply_disqualifying_factors is called twice in sequence:
+# First call (correct)
+final_score = self.feature_scorer.apply_disqualifying_factors(
+    final_score, parsed, candidate
+)
+
+# Second call (BUG - penalty applied twice, squaring the multiplier)
+final_score = self.feature_scorer.apply_disqualifying_factors(
+    final_score, parsed, candidate
+)
+
+The Fix
+Delete the second call entirely. Find the block (it appears at approximately lines 340-345) and remove it:
+# KEEP only this one call:
+final_score = self.feature_scorer.apply_disqualifying_factors(
+    final_score, parsed, candidate
+)
+
+# DELETE the second identical block below it
+
+
+  BUG #2 - CRITICAL   semantic_similarity receives raw cross-encoder logits
+File: backend/engines/optimized_ranking_engine.py  |  confirmed: semantic_similarity max = 3.05 in ranking_detailed.json
+Impact: The scoring formula weights semantic_similarity at 0.01, so the numerical effect is small, but the component value is meaningless (logits are not probabilities or similarities). A cross-encoder score of 3.05 is being added to components that are all in [0,1]. The formula is semantically broken.
+
+The Problem
+In rank_candidates_fast, the FAISS score (or cross-encoder raw logit) is passed directly:
+semantic_sim = faiss_score_map.get(candidate_id, 0.0)
+components = self.feature_scorer.score_candidate(
+    candidate, parsed,
+    semantic_similarity=semantic_sim,  # raw logit, not in [0,1]
+    ...
+)
+
+The Fix
+Normalize the cross-encoder score with a sigmoid before passing it in. Add this line just before the score_candidate call:
+import math
+
+# Normalize raw cross-encoder logit to [0, 1] via sigmoid
+raw_sem = faiss_score_map.get(candidate_id, 0.0)
+semantic_sim = 1.0 / (1.0 + math.exp(-raw_sem))
+
+components = self.feature_scorer.score_candidate(
+    candidate, parsed,
+    semantic_similarity=semantic_sim,  # now in (0, 1)
+    ...
+)
+
+
+  BUG #3 - CRITICAL   years_since_last_coding = 999 for non-engineer titles
+File: backend/engines/candidate_profile_parser.py  |  Method: parse_candidate()
+Impact: Any candidate whose title is not in ENGINEERING_TITLES (which does NOT include 'data scientist', 'applied scientist', 'research engineer') gets years_since_last_coding=999. Then apply_disqualifying_factors multiplies their score by 0.3 for 'no recent coding'. A Senior Data Scientist actively at Google is treated as if they haven't coded in years.
+
+The Problem
+The ENGINEERING_TITLES set in candidate_profile_parser.py is too narrow:
+ENGINEERING_TITLES = {
+    'engineer', 'ml engineer', 'ai engineer', 'data engineer',
+    'ml researcher', 'ai researcher', 'scientist',     # 'scientist' alone is fine
+    'technical lead', 'tech lead', 'architect'
+}
+
+# Then in parse_candidate():
+is_engineer = any(eng_title in current_title.lower()
+                  for eng_title in self.ENGINEERING_TITLES)
+if is_engineer and most_recent_role_ended_months_ago < 18:
+    years_since_last_coding = ...
+else:
+    years_since_last_coding = 999.0  # BUG: hits for 'Data Scientist'
+
+The Fix
+Expand the ENGINEERING_TITLES set to cover all technical roles the JD targets:
+ENGINEERING_TITLES = {
+    'engineer', 'ml engineer', 'ai engineer', 'data engineer',
+    'ml researcher', 'ai researcher', 'scientist',
+    'technical lead', 'tech lead', 'architect',
+    # ADD THESE:
+    'data scientist', 'applied scientist', 'research scientist',
+    'research engineer', 'applied researcher',
+    'machine learning', 'deep learning',   # catches 'machine learning specialist' etc
+}
+Alternatively, invert the logic: only set 999 for titles explicitly in a MANAGEMENT_TITLES or NON_CODING_TITLES blocklist, letting everything else default to the normal calculation.
+
+
+  BUG #4 - HIGH   Score ceiling collapse - 8-way tie at 1.0000
+File: backend/engines/feature_scorer.py  |  Property: ScoringComponents.final_score
+Impact: 8 of your top candidates are indistinguishable at score=1.0000. Judges reviewing your JSON see no differentiation at the very top. The score formula correctly computes higher values (base × 1.3 behavioral easily exceeds 1.0) but clamps them. You're throwing away ordering information for your best candidates.
+
+The Fix - Two-Step Normalization
+Step 1: Remove the hard clamp from ScoringComponents.final_score - let it compute the true value:
+@property
+def final_score(self) -> float:
+    base = (
+        self.title_relevance        * 0.30 +
+        self.skill_trust_score      * 0.25 +
+        self.assessment_score       * 0.20 +
+        self.experience_level_fit   * 0.08 +
+        self.education_score        * 0.05 +
+        self.technical_relevance    * 0.05 +
+        self.production_experience  * 0.04 +
+        self.evaluation_framework_score * 0.02 +
+        self.semantic_similarity    * 0.01
+    )
+    raw = base * self.profile_quality_multiplier * self.behavioral_multiplier
+    return max(raw, 0.0)  # Remove the min(raw, 1.0) clamp here
+
+Step 2: After collecting all scored candidates in rank_candidates_fast, normalize by dividing by the maximum raw score:
+# After scoring all candidates, before sorting:
+if scored_candidates:
+    max_raw = max(s['final_score'] for s in scored_candidates)
+    if max_raw > 0:
+        for s in scored_candidates:
+            s['final_score'] = s['final_score'] / max_raw
+
+# Then sort as before
+scored_candidates.sort(key=lambda x: (-round(x['final_score'], 4), x['candidate_id']))
+This preserves all relative ordering, eliminates the ceiling collapse, and gives your best candidate exactly 1.0000 while spreading everyone else proportionally.
+
+
+  BUG #5 - HIGH   assessment_score = 0.0 for candidates with no keyword-matched assessments
+File: backend/engines/feature_scorer.py  |  Method: _score_skill_assessments()
+Impact: Your rank-1 candidate (CAND_0002025, Senior AI Engineer at Apple) has assessment_score=0.0 despite being at the top. The 20% weight on assessment_score is the third-largest component. Any candidate whose platform assessment names don't exactly substring-match JD keywords loses 20% of their base score.
+
+The Fix
+Add a fallback: when no assessments match JD keywords, return a discounted average of all available assessments rather than zero:
+def _score_skill_assessments(self, candidate_raw, jd_skill_keywords):
+    assessments = candidate_raw.get('redrob_signals', {}).get(
+        'skill_assessment_scores', {}
+    )
+    if not assessments:
+        return 0.0
+
+    relevant_scores = []
+    for skill_name, score in assessments.items():
+        skill_lower = skill_name.lower()
+        if any(jd_kw in skill_lower or skill_lower in jd_kw
+               for jd_kw in jd_skill_keywords):
+            relevant_scores.append(score / 100.0)
+
+    if relevant_scores:
+        return min(sum(relevant_scores) / len(relevant_scores), 1.0)
+
+    # FALLBACK: no keyword match, use discounted average of all assessments
+    all_scores = [v / 100.0 for v in assessments.values()]
+    return min(sum(all_scores) / len(all_scores) * 0.6, 1.0)  # 40% discount
+
+
+  BUG #6 - HIGH   skill_trust normalizer divided by hard-coded 5.0
+File: backend/engines/feature_scorer.py  |  Method: _score_skill_trust()
+Impact: A candidate with 3 perfectly-trusted JD-relevant skills (expert, 36+ months, 20+ endorsements) scores 3/5=0.60. A keyword-stuffer with 5 zero-trust skills scores 0.0, which is correct, but the normalization is arbitrary and caps strong candidates unfairly.
+
+The Fix
+Replace total_trust/5.0 with a mean-based formula that rewards quality over quantity:
+# CURRENT (arbitrary normalizer):
+return min(total_trust / 5.0, 1.0)
+
+# REPLACE WITH (mean trust + count bonus):
+if matched_count == 0:
+    return 0.0
+mean_trust = total_trust / matched_count
+# Bonus for covering more JD skills (up to 5), but mean is the base signal
+coverage_bonus = min(matched_count / 5.0, 1.0) * 0.2
+return min(mean_trust * 0.8 + coverage_bonus, 1.0)
+
+
+  BUG #7 - MEDIUM   honeypot_penalty computed twice in scoring loop
+File: backend/engines/optimized_ranking_engine.py  |  Method: rank_candidates_fast()
+Inside the scoring loop, risk_score and honeypot_penalty are computed, then computed again a few lines later. The second computation overwrites the first and happens to produce the same value, but it wastes CPU and creates a latent bug if logic is ever added between the two blocks.
+
+The Fix
+Remove the duplicate computation. Keep only one block:
+# KEEP only ONE of these two identical blocks:
+if self.honeypot_detector:
+    risk_score = self.honeypot_detector.calculate_risk_score(parsed, candidate)
+    honeypot_penalty = self.honeypot_detector.get_penalty_multiplier(risk_score)
+else:
+    honeypot_penalty = 1.0
+
+final_score = final_score * honeypot_penalty
+
+# DELETE the second identical if/else block below
+
+
+  BUG #8 - MEDIUM   Hardcoded absolute path in run_benchmark_with_jd.py
+File: backend/run_benchmark_with_jd.py
+The candidates file path is hardcoded to a local machine path. Any judge cloning your repo and running the benchmark script will get an immediate FileNotFoundError.
+
+The Fix
+# CURRENT (breaks on any other machine):
+candidates_file = "/home/NEXE/projects/Redrob hackathon/.../candidates.jsonl"
+
+# REPLACE WITH:
+import sys
+candidates_file = sys.argv[1] if len(sys.argv) > 1 else './candidates.jsonl'
+
+
+PART 2 - MODEL UPGRADES (Run Scripts, Then Re-Precompute)
+
+Storage Budget Analysis
+
+ComponentCurrentAfter UpgradeDeltaNotesPyTorch + pip packages~0.95 GB~0.95 GB-UnchangedEmbedding modelbge-small (0.13 GB)bge-large (1.34 GB)+1.21 GBBest BAAI modelEmbeddings cache (.npy)0.15 GB (384d)0.41 GB (1024d)+0.26 GB100K × 1024 × 4BFAISS index (.index)0.15 GB (384d)0.41 GB (1024d)+0.26 GBIndexFlatIP copyCross-encoder modelL-6 (0.09 GB)L-12 (0.13 GB)+0.04 GBDouble layersMisc pkl + metadata~0.01 GB~0.01 GB-NegligibleTOTAL~1.48 GB~3.25 GB+1.77 GB1.75 GB buffer left
+Upgrade 1 - Embedding Model: bge-small → bge-large
+Ranking-time cost: +0.1s (single JD query). Precompute is offline and already takes 2h - the larger model will take ~4.5h, acceptable since it's one-time.
+Quality gain: bge-large-en-v1.5 is BAAI's best model. On BEIR benchmarks it outperforms bge-small by a large margin on technical domain retrieval. More capacity = better separation between 'ML Engineer with FAISS experience' and 'Software Engineer who listed FAISS once'.
+
+Step 1: Download the model (requires network, do this before offline judging)
+Run scripts/download_models.py - but update it first to download the larger model:
+# In scripts/download_models.py, change:
+model = SentenceTransformer('BAAI/bge-small-en-v1.5')
+model.save(str(MODELS_DIR / 'bge-small-en-v1.5'))
+
+# TO:
+model = SentenceTransformer('BAAI/bge-large-en-v1.5')
+model.save(str(MODELS_DIR / 'bge-large-en-v1.5'))
+
+Step 2: Update the model name in run_ranking_optimized.py and rank.py
+# In run_ranking_optimized.py, change:
+engine = OptimizedRankingEngine(
+    embedding_model='BAAI/bge-small-en-v1.5',
+    ...
+)
+
+# TO:
+engine = OptimizedRankingEngine(
+    embedding_model='BAAI/bge-large-en-v1.5',
+    ...
+)
+
+Step 3: Update the local path check in embedding_precompute.py
+# In EmbeddingPrecomputer.__init__ or load_model(), update:
+local_path = Path(__file__).parent.parent / 'models' / 'bge-large-en-v1.5'
+if local_path.exists():
+    self.model = SentenceTransformer(str(local_path), device='cpu')
+else:
+    self.model = SentenceTransformer('BAAI/bge-large-en-v1.5', device='cpu')
+
+Step 4: Re-run precomputation (offline, before judging)
+python backend/engines/embedding_precompute.py candidates.jsonl
+The output prefix stays 'precomputed_embeddings' - no other code changes needed. The new embeddings will be 1024-dimensional (0.41 GB .npy file).
+
+
+Upgrade 2 - Cross-Encoder: L-6 → L-12
+Ranking-time cost: +3s for 250 pairs, +12s for 1000 pairs. Both well within the 5-minute budget.
+Quality gain: The 12-layer model has double the depth for the same architecture and generally scores reranking tasks more accurately.
+
+Step 1: Download the L-12 model
+# In scripts/download_models.py, also add:
+ce = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-12-v2')
+ce.save(str(MODELS_DIR / 'cross-encoder-ms-marco-MiniLM-L-12-v2'))
+
+Step 2: Update cross_encoder_reranker.py
+# In _get_cross_encoder(), change:
+local_path = Path(__file__).parent.parent / 'models' / 'cross-encoder-ms-marco-MiniLM-L-6-v2'
+# ...
+_cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu')
+
+# TO:
+local_path = Path(__file__).parent.parent / 'models' / 'cross-encoder-ms-marco-MiniLM-L-12-v2'
+# ...
+_cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-12-v2', device='cpu')
+
+
+Upgrade 3 - Cross-Encoder Pool: 250 → 1000 (Zero Code Complexity)
+This is the highest-leverage change in this entire document. Currently FAISS retrieves 1000 candidates but cross-encoder only reranks 250. The other 750 go straight to feature scoring without proper reranking, meaning many strong candidates get knocked out by a weaker similarity signal.
+Ranking-time cost: +9s (L-6) or +18s (L-12). Total budget usage still under 2 minutes.
+
+The Fix - One Line Change
+# In run_ranking_optimized.py, change:
+results, scored_candidates = engine.rank_candidates_fast(
+    top_k=100,
+    bm25_top_k=3000,
+    faiss_top_k=1000,
+    cross_encoder_top_k=250   # <-- change this
+)
+
+# TO:
+results, scored_candidates = engine.rank_candidates_fast(
+    top_k=100,
+    bm25_top_k=5000,           # also bump BM25 while here
+    faiss_top_k=1000,
+    cross_encoder_top_k=1000  # cross-encode the full FAISS output
+)
+Also update rank.py with the same values since it has its own hardcoded call.
+
+
+PART 3 - Runtime Budget (5-Minute Constraint)
+
+Pipeline StageCurrent (s)After (s)Bottleneck?NotesLoad 100K candidates (JSON parse)25-3525-35YesUnavoidableBM25 index build20-4020-40YesConsider pickling indexBM25 query (top 5000)1-32-4NoLarger pool +1sLoad precomputed FAISS index3-84-9NoLarger dim +1sJD embedding (bge-large)<0.1<0.1NoSingle queryFAISS pool search (3000/5000 → 1000)<0.5<0.5NoNegligibleCross-encoder (1000 pairs, L-12)5-1520-30ModerateMain upgrade costFeature scoring (250 candidates)0.5-20.5-2NoPure PythonSort + save<0.5<0.5NoNegligibleTOTAL55-104 s75-120 s-Budget: 300 s
+Headroom after all upgrades: ~180-225 seconds. You could additionally cache the BM25 index (saving 20-40s) or increase cross_encoder_top_k further without risk.
+
+
+PART 4 - Complete Execution Order
+
+Phase A - Apply Code Fixes (no model changes needed)
+
+1. optimized_ranking_engine.py: Delete the second call to apply_disqualifying_factors (Bug #1)
+2. optimized_ranking_engine.py: Add sigmoid normalization for semantic_similarity (Bug #2)
+3. optimized_ranking_engine.py: Delete the duplicate honeypot_penalty block (Bug #7)
+4. candidate_profile_parser.py: Expand ENGINEERING_TITLES to include data scientist, applied scientist, etc. (Bug #3)
+5. feature_scorer.py ScoringComponents.final_score: Remove the min(..., 1.0) clamp (Bug #4 step 1)
+6. feature_scorer.py rank_candidates_fast: Add post-scoring normalization by max score (Bug #4 step 2)
+7. feature_scorer.py _score_skill_assessments: Add fallback to discounted average when no keyword match (Bug #5)
+8. feature_scorer.py _score_skill_trust: Replace total/5.0 with mean_trust + coverage_bonus formula (Bug #6)
+9. run_benchmark_with_jd.py: Replace hardcoded path with sys.argv (Bug #8)
+
+Phase B - Model Upgrades (requires network, do before offline judging)
+
+1. Run updated scripts/download_models.py to download bge-large-en-v1.5 and ms-marco-MiniLM-L-12-v2
+2. Update model name in run_ranking_optimized.py, rank.py, and embedding_precompute.py
+3. Update cross-encoder model path in cross_encoder_reranker.py
+4. Change cross_encoder_top_k=1000 and bm25_top_k=5000 in both rank.py and run_ranking_optimized.py
+
+Phase C - Re-Precompute Embeddings (offline, ~4-5 hours)
+
+1. Delete the existing embeddings_cache/ directory (old 384d embeddings are incompatible with 1024d bge-large)
+2. Run: python backend/engines/embedding_precompute.py candidates.jsonl
+3. Verify output: precomputed_embeddings_embeddings.npy (~410 MB), precomputed_embeddings_faiss.index (~410 MB), precomputed_embeddings_ids.pkl, precomputed_embeddings_metadata.json
+
+Phase D - Re-Run Ranking and Validate
+
+python backend/rank.py --candidates ./candidates.jsonl --out ./submission.csv --skip-precompute
+python validate_submission.py ./submission.csv
+
+Expected result: submission.csv passes validation, ranking_detailed.json shows no 8-way tie at the top, score spread is much tighter and differentiated.
+
+
+PART 5 - Quick Reference Checklist
+
+#Fix / UpgradeSeverityFile1Delete second apply_disqualifying_factors() callCRITICALoptimized_ranking_engine.py2Normalize semantic_similarity via sigmoid before scoringCRITICALoptimized_ranking_engine.py3Expand ENGINEERING_TITLES (add data scientist, applied scientist)CRITICALcandidate_profile_parser.py4Remove score clamp + add post-scoring normalizationHIGHfeature_scorer.py5Add assessment fallback for non-keyword-matched candidatesHIGHfeature_scorer.py6Replace skill_trust normalizer with mean_trust formulaHIGHfeature_scorer.py7Delete duplicate honeypot_penalty computationMEDIUMoptimized_ranking_engine.py8Replace hardcoded path with sys.argvMEDIUMrun_benchmark_with_jd.py9Upgrade embedding: bge-small → bge-large-en-v1.5UPGRADEmultiple files10Upgrade cross-encoder: L-6 → L-12UPGRADEcross_encoder_reranker.py11Increase cross_encoder_top_k: 250 → 1000UPGRADErank.py + run_ranking_optimized.py12Increase bm25_top_k: 3000 → 5000UPGRADErank.py + run_ranking_optimized.py13Delete embeddings_cache/ and re-precompute with bge-largeREQUIREDterminal
+
+Repdox × SolveForIndia - India Runs Data & AI Challenge
