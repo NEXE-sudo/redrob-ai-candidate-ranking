@@ -53,9 +53,12 @@ env/
 *.pickle
 *.joblib
 
+# Ignore generic embeddings/cache directories, but keep our repo cache exposed
 embeddings_cache/
 cache/
 model_cache/
+!backend/embeddings_cache/
+!backend/embeddings_cache/**
 
 # ==================================================
 # Ranking Outputs
