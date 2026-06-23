@@ -224,24 +224,18 @@ class EmbeddingPrecomputer:
         print(f"    FAISS idx:  {faiss_index_path} -> {'FOUND' if faiss_index_path.exists() else 'MISSING'}")
     
     def load_model(self):
-        """Load Sentence Transformer model"""
+        """Load Sentence Transformer model from a local offline cache."""
         if self.model is None:
             local_path = _resolve_local_model_dir(self.model_name)
             if local_path.exists():
                 print(f"Loading model from local path: {local_path}")
                 self.model = SentenceTransformer(str(local_path), device='cpu')
             else:
-                print(
-                    f"Local embedding model not found at {local_path}. "
-                    "Attempting remote load and caching locally for future offline use."
+                raise FileNotFoundError(
+                    f"Local embedding model not found at '{local_path}'. "
+                    "Please run 'python backend/scripts/download_models.py' first to "
+                    "download the required model for offline use."
                 )
-                self.model = SentenceTransformer(self.model_name, device='cpu')
-                try:
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                    self.model.save(str(local_path))
-                    print(f"Saved remote embedding model to local cache: {local_path}")
-                except Exception as save_exc:
-                    print(f"Warning: failed to save embedding model to local cache: {save_exc}")
             print("Model loaded successfully")
     
     def precompute_embeddings(

@@ -115,8 +115,11 @@ class EmbeddingRetriever:
                 self.model = self.SentenceTransformer(str(local_path), device='cpu')
                 print(f"Loaded local embedding model from: {local_path}")
             else:
-                self.model = self.SentenceTransformer(self.model_name, device='cpu')
-                print(f"Loaded embedding model: {self.model_name}")
+                raise FileNotFoundError(
+                    f"Local embedding model not found at '{local_path}'. "
+                    "Please run 'python backend/scripts/download_models.py' first to "
+                    "download the required model for offline use."
+                )
 
     def build_index(self, candidates: List[dict], batch_size: int = 64, use_cache: bool = True) -> Tuple[np.ndarray, List[str]]:
         if self.model is None:
