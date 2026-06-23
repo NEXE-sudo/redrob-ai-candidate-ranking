@@ -3,5 +3,7 @@ backend/embeddings_cache/*.npy filter=lfs diff=lfs merge=lfs -text
 backend/embeddings_cache/*.index filter=lfs diff=lfs merge=lfs -text
 backend/embeddings_cache/*.pkl filter=lfs diff=lfs merge=lfs -text
 backend/embeddings_cache/*.json filter=lfs diff=lfs merge=lfs -text
+
+# Track backend model files with Git LFS
 backend/models/** filter=lfs diff=lfs merge=lfs -text
 backend/embeddings_cache/** filter=lfs diff=lfs merge=lfs -text

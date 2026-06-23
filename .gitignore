@@ -1,4 +1,4 @@
-# Ignore large model directories
+# Ignore large model directories by default
 /backend/models/
 
 # Ignore common large model file types just in case
@@ -8,6 +8,10 @@
 
 # Keep embeddings and cache directories tracked
 !backend/embeddings_cache/
+
+# Allow backend models to be tracked explicitly via Git LFS
+!backend/models/
+!backend/models/**
 
 # Python caches and env
 __pycache__/
