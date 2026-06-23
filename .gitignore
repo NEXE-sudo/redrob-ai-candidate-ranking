@@ -1,3 +1,22 @@
+# Ignore large model directories
+/backend/models/
+
+# Ignore common large model file types just in case
+*.safetensors
+*.pt
+*.bin
+
+# Keep embeddings and cache directories tracked
+!backend/embeddings_cache/
+
+# Python caches and env
+__pycache__/
+.env
+venv/
+env/
+
+# OS files
+.DS_Store
 # ==================================================
 # Python
 # ==================================================
