@@ -18,10 +18,10 @@ def download_models(models_dir: Path = None):
         models_dir = MODELS_DIR
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    embedding_model_name = 'BAAI/bge-large-en-v1.5'
+    embedding_model_name = 'sentence-transformers/all-MiniLM-L6-v2'
     cross_encoder_model_name = 'cross-encoder/ms-marco-MiniLM-L-12-v2'
 
-    embedding_path = models_dir / 'bge-large-en-v1.5'
+    embedding_path = models_dir / 'all-MiniLM-L6-v2'
     cross_encoder_path = models_dir / 'cross-encoder-ms-marco-MiniLM-L-12-v2'
 
     if not embedding_path.exists():

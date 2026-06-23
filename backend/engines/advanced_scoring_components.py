@@ -207,9 +207,13 @@ class HoneypotDetector:
         if self._has_career_inconsistency(parsed_profile):
             risk += 0.15
         
-        # Check for excessive expert skills
+# Check for excessive expert skills / zero-duration mastery claims
         if self._has_excessive_expert_skills(candidate):
-            risk += 0.10
+            risk += 0.20
+
+        # Check for expert/mastery skills with zero reported duration
+        if self._has_mastery_without_duration(candidate):
+            risk += 0.15
         
         # Check for generic profile
         if self._is_generic_profile(parsed_profile, candidate):
@@ -304,6 +308,16 @@ class HoneypotDetector:
         skills = candidate.get('skills', [])
         if not skills:
             return False
-        
+
         expert_count = sum(1 for s in skills if s.get('proficiency') in ['expert', 'mastery'])
-        return expert_count > 20
+        return len(skills) > 5 and expert_count / len(skills) > 0.8
+
+    def _has_mastery_without_duration(self, candidate: Dict[str, Any]) -> bool:
+        """Check for expert/mastery skills declared with zero duration."""
+        zero_duration_mastery = 0
+        for skill in candidate.get('skills', []):
+            proficiency = skill.get('proficiency', '').lower()
+            duration = skill.get('duration_months', 0)
+            if proficiency in ['expert', 'mastery'] and duration == 0:
+                zero_duration_mastery += 1
+        return zero_duration_mastery >= 2

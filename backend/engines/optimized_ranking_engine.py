@@ -42,7 +42,7 @@ class OptimizedRankingEngine:
         self,
         embeddings_cache_dir: str = './embeddings_cache',
         use_precomputed_embeddings: bool = True,
-        embedding_model: str = 'BAAI/bge-large-en-v1.5',  # Phase 10: Configurable
+        embedding_model: str = 'sentence-transformers/all-MiniLM-L6-v2',  # Phase 10: Configurable offline-safe model
         enable_cross_encoder: bool = True,  # Phase 1: Toggle cross-encoder
         enable_honeypot_detection: bool = True  # Phase 4: Toggle honeypot detection
     ):
@@ -384,10 +384,15 @@ class OptimizedRankingEngine:
                 risk_score = self.honeypot_detector.calculate_risk_score(parsed, candidate)
                 honeypot_penalty = self.honeypot_detector.get_penalty_multiplier(risk_score)
 
-            # Use ScoringComponents.final_score which already incorporates
-            # the new weights, behavioral multiplier, and profile quality.
-            # Do NOT recompute weights here — trust the dataclass formula.
-            final_score = components.final_score * honeypot_penalty
+            # Use ScoringComponents.final_score plus auxiliary ranking signals.
+            # This ensures product/career/retrieval evaluation strength influences final rank.
+            auxiliary_bonus = (
+                career_traj_score * 0.02 +
+                product_fit_score * 0.02 +
+                retrieval_depth_score * 0.015 +
+                eval_framework_score * 0.02
+            )
+            final_score = max((components.final_score + auxiliary_bonus) * honeypot_penalty, 0.0)
 
             # Apply additional disqualifiers (consulting-only etc.)
             final_score = self.feature_scorer.apply_disqualifying_factors(

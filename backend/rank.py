@@ -94,7 +94,7 @@ def main():
     engine = OptimizedRankingEngine(
         embeddings_cache_dir=str(cache_dir),
         use_precomputed_embeddings=True,
-        embedding_model='BAAI/bge-large-en-v1.5',
+        embedding_model='sentence-transformers/all-MiniLM-L6-v2',
         enable_cross_encoder=True,
         enable_honeypot_detection=True
     )

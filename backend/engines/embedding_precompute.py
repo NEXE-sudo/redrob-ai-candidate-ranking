@@ -99,8 +99,10 @@ def _calculate_adaptive_batch_size(embedding_dim: int = 384, available_ram_gb: f
 
 
 _MODEL_EMBEDDING_DIMS = {
-    'BAAI/bge-large-en-v1.5': 1024,
+    'sentence-transformers/bge-small-en-v1.5': 384,
+    'sentence-transformers/all-MiniLM-L6-v2': 384,
     'BAAI/bge-small-en-v1.5': 384,
+    'BAAI/bge-large-en-v1.5': 1024,
 }
 
 
@@ -123,10 +125,10 @@ def download_models(models_dir: Path = None):
         models_dir = Path(__file__).resolve().parents[1] / 'models'
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    embedding_model_name = 'BAAI/bge-large-en-v1.5'
+    embedding_model_name = 'sentence-transformers/all-MiniLM-L6-v2'
     cross_encoder_name = 'cross-encoder/ms-marco-MiniLM-L-12-v2'
 
-    embedding_local_path = models_dir / 'bge-large-en-v1.5'
+    embedding_local_path = models_dir / 'all-MiniLM-L6-v2'
     cross_encoder_local_path = models_dir / 'cross-encoder-ms-marco-MiniLM-L-12-v2'
 
     if not embedding_local_path.exists():
@@ -156,7 +158,7 @@ class EmbeddingPrecomputer:
     
     def __init__(
         self,
-        model_name: str = 'BAAI/bge-large-en-v1.5',
+        model_name: str = 'sentence-transformers/all-MiniLM-L6-v2',
         embedding_dim: int | None = None,
         cache_dir: str = './embeddings_cache'
     ):
@@ -229,11 +231,17 @@ class EmbeddingPrecomputer:
                 print(f"Loading model from local path: {local_path}")
                 self.model = SentenceTransformer(str(local_path), device='cpu')
             else:
-                raise FileNotFoundError(
+                print(
                     f"Local embedding model not found at {local_path}. "
-                    "Offline mode requires the model cached locally. "
-                    "Run backend/scripts/download_models.py first."
+                    "Attempting remote load and caching locally for future offline use."
                 )
+                self.model = SentenceTransformer(self.model_name, device='cpu')
+                try:
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    self.model.save(str(local_path))
+                    print(f"Saved remote embedding model to local cache: {local_path}")
+                except Exception as save_exc:
+                    print(f"Warning: failed to save embedding model to local cache: {save_exc}")
             print("Model loaded successfully")
     
     def precompute_embeddings(

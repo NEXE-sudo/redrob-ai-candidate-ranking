@@ -6,6 +6,7 @@ OPTIMIZATIONS: BM25 vectorization, FAISS thread config
 """
 
 import numpy as np
+from pathlib import Path
 from typing import List, Tuple
 
 # Import threading configuration
@@ -97,7 +98,7 @@ class BM25Retriever:
 class EmbeddingRetriever:
     """FAISS-based embedding retrieval for candidates"""
     
-    def __init__(self, model_name: str = 'BAAI/bge-large-en-v1.5'):
+    def __init__(self, model_name: str = 'sentence-transformers/all-MiniLM-L6-v2'):
         from sentence_transformers import SentenceTransformer
         self.model_name = model_name
         self.SentenceTransformer = SentenceTransformer
@@ -108,8 +109,14 @@ class EmbeddingRetriever:
         
     def load_model(self):
         if self.model is None:
-            self.model = self.SentenceTransformer(self.model_name, device='cpu')
-            print(f"Loaded embedding model: {self.model_name}")
+            local_dir = self.model_name.split('/', 1)[1] if '/' in self.model_name else self.model_name
+            local_path = Path(__file__).resolve().parents[1] / 'models' / local_dir
+            if local_path.exists():
+                self.model = self.SentenceTransformer(str(local_path), device='cpu')
+                print(f"Loaded local embedding model from: {local_path}")
+            else:
+                self.model = self.SentenceTransformer(self.model_name, device='cpu')
+                print(f"Loaded embedding model: {self.model_name}")
 
     def build_index(self, candidates: List[dict], batch_size: int = 64, use_cache: bool = True) -> Tuple[np.ndarray, List[str]]:
         if self.model is None:

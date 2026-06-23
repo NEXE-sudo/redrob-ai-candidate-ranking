@@ -46,6 +46,7 @@ class ScoringComponents:
             self.technical_relevance    * 0.05 +
             self.production_experience  * 0.04 +
             self.evaluation_framework_score * 0.02 +
+            self.product_mindset_score   * 0.02 +
             self.semantic_similarity    * 0.01
         )
 
