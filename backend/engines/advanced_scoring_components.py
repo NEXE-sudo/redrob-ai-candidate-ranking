@@ -207,8 +207,8 @@ class HoneypotDetector:
         if self._has_career_inconsistency(parsed_profile):
             risk += 0.15
         
-# Check for excessive expert skills / zero-duration mastery claims
-        if self._has_excessive_expert_skills(candidate):
+        # Check for excessive expert skills ratio
+        if self._has_excessive_expert_skills(candidate, parsed_profile.years_experience):
             risk += 0.20
 
         # Check for expert/mastery skills with zero reported duration
@@ -232,17 +232,41 @@ class HoneypotDetector:
     
     def _has_overlapping_employment(self, parsed: ParsedProfile) -> bool:
         """Check for overlapping employment dates"""
-        if not parsed.career_history or len(parsed.career_history) < 2:
+        # Work on a copy: filter out entries missing start_date
+        entries = [r for r in parsed.career_history if r.get('start_date')]
+        if len(entries) < 2:
             return False
-        
-        for i in range(len(parsed.career_history) - 1):
-            role1_end = parsed.career_history[i].get('end_date')
-            role2_start = parsed.career_history[i + 1].get('start_date')
-            
-            if role1_end and role2_start:
-                if role1_end > role2_start:
-                    return True
-        
+
+        def _parse_date(d):
+            try:
+                return datetime.strptime(d, '%Y-%m-%d')
+            except Exception:
+                return None
+
+        # Build list with parsed start/end, drop entries without a parseable start
+        parsed_entries = []
+        for r in entries:
+            sd = _parse_date(r.get('start_date'))
+            ed = _parse_date(r.get('end_date')) if r.get('end_date') else None
+            if sd is not None:
+                parsed_entries.append((sd, ed))
+
+        if len(parsed_entries) < 2:
+            return False
+
+        # Sort chronologically by start date (oldest first)
+        parsed_entries.sort(key=lambda x: x[0])
+
+        # Compare each role's end_date against the next role's start_date
+        for i in range(len(parsed_entries) - 1):
+            end_date = parsed_entries[i][1]
+            next_start = parsed_entries[i + 1][0]
+            if end_date is None:
+                # Current/ongoing role; cannot infer overlap from an open-ended end
+                continue
+            if end_date > next_start:
+                return True
+
         return False
     
     def _has_unrealistic_experience(self, parsed: ParsedProfile) -> bool:
@@ -263,12 +287,7 @@ class HoneypotDetector:
         if not skills:
             return True  # No skills is suspicious
         
-        # All skills are "expert" level (common in honeypots)
-        expert_count = sum(1 for s in skills if s.get('proficiency') == 'expert')
-        if len(skills) > 5 and expert_count / len(skills) > 0.8:
-            return True
-        
-        # Too many unrelated skills
+        # Too many unrelated skills may indicate a padded profile
         if len(skills) > 50:
             return True
         
@@ -276,17 +295,27 @@ class HoneypotDetector:
     
     def _has_career_inconsistency(self, parsed: ParsedProfile) -> bool:
         """Check for career inconsistencies"""
-        if not parsed.career_history:
+        if not parsed.career_history or len(parsed.career_history) < 3:
             return False
         
-        # Huge title changes
+        ML_TITLE_DOMAIN_WORDS = {
+            'engineer', 'scientist', 'researcher', 'developer', 'analyst',
+            'architect', 'ml', 'ai', 'ds', 'nlp', 'cv', 'data', 'applied',
+            'research', 'search', 'ranking', 'retrieval', 'recommendation',
+            'machine', 'learning', 'software', 'lead', 'staff', 'senior',
+            'junior', 'principal'
+        }
+        
         titles = [r.get('title', '').lower() for r in parsed.career_history]
-        for i in range(len(titles) - 1):
-            if titles[i] and titles[i + 1]:
-                # Very different roles might indicate inconsistency
-                if len(set(titles[i].split()) & set(titles[i + 1].split())) == 0:
-                    if i > 0:  # Allow one switch early in career
-                        return True
+        for i in range(1, len(titles) - 1):
+            if not titles[i] or not titles[i + 1]:
+                continue
+            words_a = set(titles[i].split())
+            words_b = set(titles[i + 1].split())
+            literal_overlap = bool(words_a & words_b)
+            domain_overlap = bool((words_a & ML_TITLE_DOMAIN_WORDS) and (words_b & ML_TITLE_DOMAIN_WORDS))
+            if not literal_overlap and not domain_overlap:
+                return True
         
         return False
     
@@ -303,14 +332,16 @@ class HoneypotDetector:
         
         return False
     
-    def _has_excessive_expert_skills(self, candidate: Dict[str, Any]) -> bool:
-        """Check for excessive expert-level skills (common in honeypots)"""
+    def _has_excessive_expert_skills(self, candidate: Dict[str, Any], years_experience: float = None) -> bool:
+        """Check for excessive expert-level skills relative to experience."""
         skills = candidate.get('skills', [])
-        if not skills:
+        if not skills or len(skills) <= 5:
             return False
 
         expert_count = sum(1 for s in skills if s.get('proficiency') in ['expert', 'mastery'])
-        return len(skills) > 5 and expert_count / len(skills) > 0.8
+        ratio = expert_count / len(skills)
+        threshold = 0.9 if (years_experience and years_experience >= 8) else 0.8
+        return ratio > threshold
 
     def _has_mastery_without_duration(self, candidate: Dict[str, Any]) -> bool:
         """Check for expert/mastery skills declared with zero duration."""
