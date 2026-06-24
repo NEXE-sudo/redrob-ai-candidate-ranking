@@ -98,7 +98,7 @@ class BM25Retriever:
 class EmbeddingRetriever:
     """FAISS-based embedding retrieval for candidates"""
     
-    def __init__(self, model_name: str = 'sentence-transformers/all-MiniLM-L6-v2'):
+    def __init__(self, model_name: str = 'sentence-transformers/all-mpnet-base-v2'):
         from sentence_transformers import SentenceTransformer
         self.model_name = model_name
         self.SentenceTransformer = SentenceTransformer

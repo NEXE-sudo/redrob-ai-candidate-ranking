@@ -33,6 +33,22 @@ def main():
         "--download-models", action="store_true",
         help="Download embedding and cross-encoder models locally and exit."
     )
+    parser.add_argument(
+        "--job-desc", default=None,
+        help="Path to a job description text file. If unset, uses built-in JD_TEXT."
+    )
+    parser.add_argument(
+        "--bm25-top-k", type=int, default=5000,
+        help="BM25 retrieval pool size for semantic reranking."
+    )
+    parser.add_argument(
+        "--faiss-top-k", type=int, default=1000,
+        help="FAISS semantic retrieval top-k after BM25 filtering."
+    )
+    parser.add_argument(
+        "--cross-encoder-top-k", type=int, default=1000,
+        help="Cross-encoder reranking top-k candidates. Set 0 to disable."
+    )
     default_cache_dir = str(Path(__file__).resolve().parent / "embeddings_cache")
     parser.add_argument(
         "--cache-dir", default=default_cache_dir,
@@ -94,19 +110,28 @@ def main():
     engine = OptimizedRankingEngine(
         embeddings_cache_dir=str(cache_dir),
         use_precomputed_embeddings=True,
-        embedding_model='sentence-transformers/all-MiniLM-L6-v2',
+        embedding_model='sentence-transformers/all-mpnet-base-v2',
         enable_cross_encoder=True,
         enable_honeypot_detection=True
     )
 
     engine.load_candidates(args.candidates)
-    engine.prepare_jd_text(JD_TEXT)
+
+    if args.job_desc:
+        job_desc_path = Path(args.job_desc)
+        if not job_desc_path.exists():
+            raise FileNotFoundError(f"Job description file not found: {job_desc_path}")
+        with open(job_desc_path, 'r', encoding='utf-8') as f:
+            job_desc_text = f.read().strip()
+        engine.prepare_jd_text(job_desc_text)
+    else:
+        engine.prepare_jd_text(JD_TEXT)
 
     results, _ = engine.rank_candidates_fast(
         top_k=100,
-        bm25_top_k=5000,
-        faiss_top_k=1000,
-        cross_encoder_top_k=1000
+        bm25_top_k=args.bm25_top_k,
+        faiss_top_k=args.faiss_top_k,
+        cross_encoder_top_k=args.cross_encoder_top_k
     )
 
     out_path = Path(args.out)

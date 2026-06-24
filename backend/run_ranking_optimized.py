@@ -82,7 +82,7 @@ def run_ranking_pipeline(candidates_file: str):
         print("\n[Init] Initializing enhanced ranking engine...")
         engine = OptimizedRankingEngine(
             use_precomputed_embeddings=True,
-            embedding_model='sentence-transformers/all-MiniLM-L6-v2',  # Phase 10: Configurable
+            embedding_model='sentence-transformers/all-mpnet-base-v2',  # Phase 10: Configurable
             enable_cross_encoder=True,  # Phase 1: Enable cross-encoder
             enable_honeypot_detection=True  # Phase 4: Enable honeypot detection
         )

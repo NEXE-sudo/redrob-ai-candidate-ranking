@@ -42,7 +42,7 @@ class OptimizedRankingEngine:
         self,
         embeddings_cache_dir: str = './embeddings_cache',
         use_precomputed_embeddings: bool = True,
-        embedding_model: str = 'sentence-transformers/all-MiniLM-L6-v2',  # Phase 10: Configurable offline-safe model
+        embedding_model: str = 'sentence-transformers/all-mpnet-base-v2',  # Phase 10: Configurable offline-safe model
         enable_cross_encoder: bool = True,  # Phase 1: Toggle cross-encoder
         enable_honeypot_detection: bool = True  # Phase 4: Toggle honeypot detection
     ):
@@ -471,7 +471,13 @@ class OptimizedRankingEngine:
                     'evaluation_framework_score': float(scored['components'].evaluation_framework_score),
                     'product_mindset_score': float(scored['components'].product_mindset_score),
                 },
-                'reasoning': reasoning_text
+                'reasoning': reasoning_text,
+                'ranked_by': 'hybrid_bm25_faiss_crossencoder',
+                'jd_alignment': {
+                    'required_match': float(min(1.0, scored['components'].technical_relevance)),
+                    'behavioral_trust': float(scored['components'].behavioral_multiplier),
+                    'honeypot_penalty': float(1.0 - scored.get('honeypot_penalty', 1.0))
+                }
             }
             results.append(result)
         
@@ -547,6 +553,20 @@ class OptimizedRankingEngine:
         retrieved_scores = [float(similarities[i]) for i in top_indices_in_pool]
         return retrieved_ids, retrieved_scores
 
+    def _count_jd_matches(self, candidate_raw: Dict[str, Any], parsed_profile: ParsedProfile) -> Tuple[int, int, int]:
+        """Count JD required, preferred, and negative keyword matches in candidate text."""
+        if not self.requirement_profile:
+            return 0, 0, 0
+
+        candidate_text = self.feature_scorer._collect_candidate_text(candidate_raw, parsed_profile)
+        candidate_text = candidate_text.lower()
+
+        required = sum(1 for kw in self.requirement_profile.required_keywords if kw in candidate_text)
+        preferred = sum(1 for kw in self.requirement_profile.preferred_keywords if kw in candidate_text)
+        negatives = sum(1 for kw in self.requirement_profile.negative_signals if kw in candidate_text)
+
+        return required, preferred, negatives
+
     def _generate_improved_reasoning(
         self,
         candidate_raw: Dict[str, Any],
@@ -593,28 +613,76 @@ class OptimizedRankingEngine:
                 parsed_profile.top_skill_trust_scores.items(),
                 key=lambda x: x[1], reverse=True
             )[:3]
-            if trusted:
+            top_skills = [k for k, v in trusted if v >= 0.5]
+            if top_skills:
                 signals.append(
-                    "strong: " + ", ".join(k for k, v in trusted if v >= 0.5)
+                    "strong skills: " + ", ".join(top_skills)
                 )
 
         if components.title_relevance >= 0.8:
             signals.append("direct title match")
-        elif components.title_relevance == 0.0:
-            signals.append("title mismatch — ranked on verified skills only")
+        elif components.title_relevance >= 0.5:
+            signals.append("relevant engineering background")
+        else:
+            signals.append("strong verified skills despite title mismatch")
 
-        edu = parsed_profile.education_tier
-        if edu == "tier_1":
-            signals.append("tier-1 education")
+        if product_fit_score >= 0.35:
+            signals.append("product/startup experience")
+        if retrieval_depth_score >= 0.35:
+            signals.append("deep retrieval/embeddings experience")
+        if eval_framework_score >= 0.35:
+            signals.append("evaluation/metrics strength")
 
         if parsed_profile.interview_completion_rate < 0.5:
             signals.append(
                 f"ghost risk: {parsed_profile.interview_completion_rate:.0%} interview completion"
             )
+        elif parsed_profile.interview_completion_rate >= 0.9:
+            signals.append("high interview completion rate")
 
-        s2 = "; ".join(signals[:3]) + "." if signals else "Technical fit to JD."
+        if parsed_profile.offer_acceptance_rate >= 0.7:
+            signals.append("strong offer acceptance history")
+        elif 0 <= parsed_profile.offer_acceptance_rate < 0.3:
+            signals.append("low offer acceptance rate")
 
-        return f"{s1}. {s2}"
+        if redrob.get('open_to_work_flag', True):
+            signals.append("available/open to work")
+        else:
+            signals.append("not currently open to work")
+
+        required_hits, preferred_hits, neg_hits = self._count_jd_matches(candidate_raw, parsed_profile)
+        if self.requirement_profile:
+            req_total = len(self.requirement_profile.required_keywords)
+            pref_total = len(self.requirement_profile.preferred_keywords)
+            if req_total > 0:
+                signals.append(
+                    f"matched {required_hits}/{req_total} required JD terms"
+                )
+            if pref_total > 0:
+                signals.append(
+                    f"matched {preferred_hits}/{pref_total} preferred JD terms"
+                )
+            if neg_hits > 0:
+                signals.append(f"{neg_hits} negative JD signals present")
+
+        if honeypot_penalty < 0.98:
+            signals.append("honeypot risk penalty applied")
+
+        s2 = "; ".join(signals[:4]) + "." if signals else "Technical fit to JD."
+        s3 = ""
+
+        if self.requirement_profile and self.requirement_profile.hands_on_coding:
+            s3 = "Hands-on coding and production delivery are prioritized."
+
+        if self.requirement_profile and self.requirement_profile.leadership_required:
+            leadership_note = "Leadership and mentorship experience is also valued." 
+            s3 = (s3 + " " + leadership_note).strip()
+
+        reasoning_sentences = [f"{s1}.", s2]
+        if s3.strip():
+            reasoning_sentences.append(s3)
+
+        return " ".join(re.sub(r'\s+', ' ', sentence).strip() for sentence in reasoning_sentences)
 
     def save_results(self, results: List[Dict], output_dir: str = None):
         """
