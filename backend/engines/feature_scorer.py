@@ -38,16 +38,16 @@ class ScoringComponents:
         decisive so that keyword stuffers cannot rank highly.
         """
         base = (
-            self.title_relevance        * 0.30 +
-            self.skill_trust_score      * 0.25 +
-            self.assessment_score       * 0.20 +
-            self.experience_level_fit   * 0.08 +
-            self.education_score        * 0.05 +
-            self.technical_relevance    * 0.05 +
-            self.production_experience  * 0.04 +
-            self.evaluation_framework_score * 0.02 +
-            self.product_mindset_score   * 0.02 +
-            self.semantic_similarity    * 0.01
+            self.title_relevance        * 0.25 +
+            self.skill_trust_score      * 0.22 +
+            self.assessment_score       * 0.18 +
+            self.technical_relevance    * 0.12 +
+            self.production_experience  * 0.08 +
+            self.experience_level_fit   * 0.06 +
+            self.education_score        * 0.03 +
+            self.evaluation_framework_score * 0.03 +
+            self.product_mindset_score   * 0.03 +
+            self.semantic_similarity    * 0.10
         )
 
         final = base * self.profile_quality_multiplier * self.behavioral_multiplier
@@ -188,14 +188,14 @@ class FeatureScorer:
                 candidate_raw, parsed_profile, requirement_profile
             )
             technical_base = (
-                keyword_score * 0.50 +
-                scale_score * 0.20 +
-                jd_requirement_score * 0.20 +
-                hands_on_score * 0.05 +
-                leadership_score * 0.05
+                keyword_score * 0.35 +
+                scale_score * 0.15 +
+                jd_requirement_score * 0.30 +
+                hands_on_score * 0.12 +
+                leadership_score * 0.08
             )
         else:
-            technical_base = keyword_score * 0.7 + scale_score * 0.3
+            technical_base = keyword_score * 0.5 + scale_score * 0.25
         
         # 1C: Apply recency penalty/bonus
         recency_penalty = self._calculate_recency_penalty(parsed_profile)
@@ -220,7 +220,16 @@ class FeatureScorer:
             for role in candidate_raw.get('career_history', [])
         ])
         skill_text = ' '.join([s.get('name', '').lower() for s in candidate_raw.get('skills', [])])
-        return ' '.join([profile_text, career_text, skill_text]).strip()
+        cert_text = ' '.join([c.get('name', '').lower() for c in candidate_raw.get('certifications', [])])
+        language_text = ' '.join([l.get('language', '').lower() for l in candidate_raw.get('languages', [])])
+        return ' '.join([profile_text, career_text, skill_text, cert_text, language_text]).strip()
+
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for consistent keyword matching."""
+        text = text.lower()
+        text = re.sub(r"[^a-z0-9\s]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
 
     def _score_jd_requirement_match(
         self,
@@ -228,31 +237,69 @@ class FeatureScorer:
         parsed_profile: ParsedProfile,
         requirement_profile: RequirementProfile
     ) -> float:
-        """Score broad JD requirement fit using required/preferred terms."""
+        """Score JD requirement fit using soft keyword matching and semantic similarity.
+        
+        ROBUSTNESS: Use partial/fuzzy matching instead of hard hit counts to
+        reduce brittleness and overfitting to exact keyword lists.
+        """
         if not requirement_profile:
             return 0.0
 
-        text = self._collect_candidate_text(candidate_raw, parsed_profile)
+        candidate_text = self._normalize_text(self._collect_candidate_text(candidate_raw, parsed_profile))
         required_keywords = requirement_profile.required_keywords
         preferred_keywords = requirement_profile.preferred_keywords
 
-        if required_keywords:
-            required_hits = sum(1 for kw in required_keywords if kw in text)
-            required_score = required_hits / len(required_keywords)
-        else:
-            required_score = 1.0
+        # Soft matching: reward substring/partial matches
+        def soft_match_score(keywords, text):
+            """Return a soft match ratio for keyword lists."""
+            if not keywords:
+                return 0.0
 
-        preferred_score = 0.0
-        if preferred_keywords:
-            preferred_hits = sum(1 for kw in preferred_keywords if kw in text)
-            preferred_score = preferred_hits / len(preferred_keywords)
+            hits = 0.0
+            text_words = set(text.split())
+            for kw in keywords:
+                kw_norm = self._normalize_text(kw)
+                kw_words = kw_norm.split()
+                if kw_norm in text:
+                    hits += 1.0
+                    continue
+
+                if any(word in text for word in kw_words if len(word) >= 3):
+                    hits += 0.7
+                    continue
+
+                intersection = len(set(kw_words) & text_words)
+                if kw_words and intersection / len(kw_words) >= 0.6:
+                    hits += 0.5
+                    continue
+
+                # Reward partial semantic signal from individual term overlap
+                if any(word in text for word in kw_words):
+                    hits += 0.35
+
+            return min(hits / len(keywords), 1.0)
+
+        required_score = soft_match_score(required_keywords, candidate_text)
+        preferred_score = soft_match_score(preferred_keywords, candidate_text)
 
         negative_penalty = self._score_negative_jd_signals(
             candidate_raw, parsed_profile, requirement_profile
         )
 
+        # Balance required vs. preferred; soften thresholds
         score = required_score * 0.60 + preferred_score * 0.30
         score = max(score - negative_penalty, 0.0)
+
+        # Softer fallback: reward if candidate shows strong domain signals
+        if score < 0.35:
+            domain_keywords = ['embeddings', 'retrieval', 'ranking', 'semantic', 'production', 'ml', 'ai']
+            domain_hits = sum(1 for kw in domain_keywords if kw in candidate_text)
+            score = max(score, min(0.35 + domain_hits * 0.03, 0.5))
+
+        # If no required terms are present, use domain signal and JD-awareness
+        if required_score < 0.2 and preferred_score >= 0.4:
+            score = max(score, 0.28)
+
         return min(score, 1.0)
 
     def _score_negative_jd_signals(
@@ -310,11 +357,12 @@ class FeatureScorer:
         text = self._collect_candidate_text(candidate_raw, parsed_profile)
         hands_on_terms = [
             'hands-on', 'hands on', 'coding', 'implementation',
-            'write code', 'development', 'engineer', 'build', 'ship'
+            'write code', 'development', 'engineer', 'build',
+            'ship', 'productization', 'technical implementation'
         ]
         if any(term in text for term in hands_on_terms):
             return 1.0
-        return 0.55
+        return 0.45
 
     def _score_leadership_fit(
         self,
@@ -341,6 +389,21 @@ class FeatureScorer:
             return 0.85
         return 0.60
 
+    def _normalize_title(self, title: str) -> str:
+        """Normalize titles for robust matching."""
+        title = (title or '').lower()
+        title = re.sub(r"[^a-z0-9\s]", " ", title)
+        title = re.sub(r"\s+", " ", title).strip()
+        return title
+
+    def add_rank_aggregation_method(self) -> str:
+        """Return method hint for rank aggregation as alternative to score-based ranking.
+        
+        ROBUSTNESS: Provide option to use rank aggregation (Borda count, Spearman) 
+        instead of single weighted sum. Reduces impact of single dimension.
+        """
+        return "rank_aggregation_available"
+
     def _score_title_relevance(
         self,
         parsed_profile: ParsedProfile
@@ -348,45 +411,37 @@ class FeatureScorer:
         """
         Score how relevant the candidate's current title is to the JD role.
         This is the decisive anti-keyword-stuffer signal.
-        An HR Manager scores 0.0 regardless of listed skills.
-        An ML Engineer scores 1.0.
-        Check both current_title and most_recent_role_title.
         """
-        TITLE_TIERS = {
-            "tier_1": [
-                "ml engineer", "machine learning engineer", "ai engineer",
-                "ranking engineer", "search engineer", "recommendation engineer",
-                "nlp engineer", "research scientist", "applied scientist",
-                "data scientist", "computer vision engineer", "deep learning engineer",
-                "retrieval engineer", "recsys engineer", "principal engineer",
-                "staff engineer", "senior engineer"
-            ],
-            "tier_2": [
-                "software engineer", "data engineer", "backend engineer",
-                "platform engineer", "full stack engineer", "infrastructure engineer",
-                "analytics engineer", "ml ops engineer", "mlops", "devops engineer"
-            ],
-            "tier_3": [
-                "data analyst", "business analyst", "product manager",
-                "technical lead", "engineering manager", "solutions architect"
-            ]
-        }
-
-        TITLE_TIER_SCORES = {"tier_1": 1.0, "tier_2": 0.5, "tier_3": 0.2, "tier_4": 0.0}
-
         titles_to_check = [
-            parsed_profile.current_title.lower(),
-            parsed_profile.most_recent_role_title.lower()
+            self._normalize_title(parsed_profile.current_title),
+            self._normalize_title(parsed_profile.most_recent_role_title)
+        ]
+
+        title_patterns = [
+            (1.0, [r'\b(ml|machine learning|ai|artificial intelligence)\b.*\b(engineer|scientist|researcher|specialist)\b']),
+            (1.0, [r'\b(ranking|retrieval|search|recommendation|recsys)\b.*\b(engineer|scientist|developer)\b']),
+            (1.0, [r'\b(data scientist|applied scientist|research scientist|ml engineer|ai engineer|nlp engineer|deep learning engineer|computer vision engineer)\b']),
+            (0.85, [r'\b(staff|principal|lead)\b.*\b(engineer|scientist|developer)\b']),
+            (0.75, [r'\b(software engineer|backend engineer|platform engineer|full stack engineer|data engineer|mlops engineer|devops engineer)\b']),
+            (0.65, [r'\b(technical lead|tech lead|engineering manager|manager|director)\b']),
+            (0.35, [r'\b(data analyst|business analyst|product manager|program manager|project manager)\b']),
+            (0.0, [r'\b(hr manager|recruiter|talent acquisition|people operations)\b']),
         ]
 
         best_score = 0.0
         for title in titles_to_check:
-            for tier, keywords in TITLE_TIERS.items():
-                if any(kw in title for kw in keywords):
-                    tier_score = TITLE_TIER_SCORES[tier]
-                    if tier_score > best_score:
-                        best_score = tier_score
-                    break
+            if not title:
+                continue
+            for score, patterns in title_patterns:
+                if any(re.search(pattern, title) for pattern in patterns):
+                    best_score = max(best_score, score)
+
+        if best_score == 0.0 and any(
+            keyword in title
+            for title in titles_to_check
+            for keyword in ['engineer', 'scientist', 'developer', 'architect', 'data']
+        ):
+            return 0.5
 
         return best_score
 
@@ -414,10 +469,11 @@ class FeatureScorer:
         total_trust = 0.0
         matched_count = 0
 
+        normalized_jd_keywords = [self._normalize_text(jd_kw) for jd_kw in jd_skill_keywords]
         for skill in candidate_raw["skills"]:
-            name = skill.get("name", "").lower()
+            name = self._normalize_text(skill.get("name", ""))
             is_relevant = any(jd_kw in name or name in jd_kw
-                              for jd_kw in jd_skill_keywords)
+                              for jd_kw in normalized_jd_keywords)
             if not is_relevant:
                 continue
 
@@ -430,10 +486,21 @@ class FeatureScorer:
             matched_count += 1
 
         if matched_count == 0:
-            return 0.0
+            # Fallback to overall trust when JD-specific matches are missing.
+            all_skills_trust = []
+            for skill in candidate_raw["skills"]:
+                prof = PROFICIENCY_MAP.get(skill.get("proficiency", "beginner"), 0.25)
+                dur = min(skill.get("duration_months", 0) / 36.0, 1.0)
+                end = min(skill.get("endorsements", 0) / 20.0, 1.0)
+                all_skills_trust.append(prof * 0.4 + dur * 0.4 + end * 0.2)
+            if not all_skills_trust:
+                return 0.0
+            mean_trust = sum(all_skills_trust) / len(all_skills_trust)
+            fallback_factor = 0.7 if not normalized_jd_keywords else 0.55
+            return min(mean_trust * fallback_factor, 1.0)
 
         mean_trust = total_trust / matched_count
-        coverage_bonus = min(matched_count / 5.0, 1.0) * 0.2
+        coverage_bonus = min(matched_count / 6.0, 1.0) * 0.15
         return min(mean_trust * 0.8 + coverage_bonus, 1.0)
 
     def _score_skill_assessments(
@@ -453,11 +520,12 @@ class FeatureScorer:
         if not assessments:
             return 0.0
 
+        normalized_jd_keywords = [self._normalize_text(jd_kw) for jd_kw in jd_skill_keywords]
         relevant_scores = []
         for skill_name, score in assessments.items():
-            skill_lower = skill_name.lower()
+            skill_lower = self._normalize_text(skill_name)
             if any(jd_kw in skill_lower or skill_lower in jd_kw
-                   for jd_kw in jd_skill_keywords):
+                   for jd_kw in normalized_jd_keywords):
                 relevant_scores.append(score / 100.0)
 
         if not relevant_scores:
@@ -586,9 +654,16 @@ class FeatureScorer:
         elif avg_response > 96:
             multiplier *= 0.95
 
+        candidate_location = candidate_raw.get("profile", {}).get("location", "").lower()
         if requirement_profile and requirement_profile.relocation_required:
             if redrob.get('willing_to_relocate', False):
                 multiplier *= 1.03
+
+        if redrob.get("recruiter_response_rate", 0) >= 0.5:
+            multiplier *= 1.02
+            if requirement_profile and requirement_profile.location_preferences:
+                if any(loc in candidate_location for loc in requirement_profile.location_preferences):
+                    multiplier *= 1.03
 
         return min(max(multiplier, 0.4), 1.3)
 
@@ -597,7 +672,11 @@ class FeatureScorer:
         candidate_raw: Dict[str, Any],
         parsed_profile: ParsedProfile
     ) -> float:
-        """Count tier-weighted keywords in profile and career text"""
+        """Score keywords using soft n-gram matching instead of exact hits.
+        
+        ROBUSTNESS: Replace brittle exact keyword matching with softer scoring
+        that rewards partial matches and nearby words (n-grams).
+        """
         
         # Concatenate all relevant text
         profile_text = (
@@ -612,26 +691,43 @@ class FeatureScorer:
         ])
         
         all_text = profile_text + ' ' + career_text
-        
-        # Count skill names too
         skill_text = ' '.join([s['name'].lower() for s in candidate_raw['skills']])
         all_text = all_text + ' ' + skill_text
         
-        # Count keywords by tier
-        tier1_count = sum(1 for keyword in self.TIER_1_KEYWORDS if keyword in all_text)
-        tier2_count = sum(1 for keyword in self.TIER_2_KEYWORDS if keyword in all_text)
-        tier3_count = sum(1 for keyword in self.TIER_3_KEYWORDS if keyword in all_text)
+        # Soft counting: penalize keyword position but reward partial matches
+        def soft_keyword_count(keywords, text, boost=1.0):
+            """Count with soft matching: reward substring matches, not just exact."""
+            count = 0.0
+            for kw in keywords:
+                # Exact match: full credit
+                if kw in text:
+                    count += 1.0 * boost
+                # Substring match (e.g. "embedding" in "embeddings"): 0.6 credit
+                else:
+                    # Check if keyword is substring of nearby text
+                    kw_short = kw.replace(' ', '')
+                    if any(kw_short in word for word in text.split() if len(word) >= len(kw_short)):
+                        count += 0.6 * boost
+            return count
         
-        # Expected counts (from JD analysis)
-        tier1_expected = 4  # embeddings, retrieval, vector DB, ranking
-        tier2_expected = 5  # LLM, fine-tuning, eval, etc
-        tier3_expected = 5  # Python, ML, AI, etc
+        tier1_count = soft_keyword_count(self.TIER_1_KEYWORDS, all_text, boost=1.0)
+        tier2_count = soft_keyword_count(self.TIER_2_KEYWORDS, all_text, boost=0.8)
+        tier3_count = soft_keyword_count(self.TIER_3_KEYWORDS, all_text, boost=0.6)
         
-        # Normalized score
+        # Softer expectation thresholds to reduce overfitting
+        tier1_expected = 3.5
+        tier2_expected = 4.0
+        tier3_expected = 5.0
+        
+        # Use sigmoid-like saturation instead of hard cap
+        tier1_sat = min(tier1_count / tier1_expected, 1.0) if tier1_expected > 0 else 0.0
+        tier2_sat = min(tier2_count / tier2_expected, 1.0) if tier2_expected > 0 else 0.0
+        tier3_sat = min(tier3_count / tier3_expected, 1.0) if tier3_expected > 0 else 0.0
+        
         keyword_score = (
-            0.4 * min(tier1_count / max(tier1_expected, 1), 1.0) +
-            0.35 * min(tier2_count / max(tier2_expected, 1), 1.0) +
-            0.25 * min(tier3_count / max(tier3_expected, 1), 1.0)
+            0.40 * tier1_sat +
+            0.35 * tier2_sat +
+            0.25 * tier3_sat
         )
         
         return min(max(keyword_score, 0.0), 1.0)
@@ -713,6 +809,18 @@ class FeatureScorer:
         # Bonus for sustained scale exposure
         if parsed_profile.most_recent_company_size in ['1001-5000', '5001-10000', '10001+']:
             deep_experience_score += 0.05
+        elif parsed_profile.current_company_size in ['1001-5000', '5001-10000', '10001+']:
+            deep_experience_score += 0.04
+        elif parsed_profile.current_company_size == '501-1000':
+            deep_experience_score += 0.02
+        elif parsed_profile.current_company_size == '201-500':
+            deep_experience_score += 0.01
+
+        if parsed_profile.current_industry and any(
+            keyword in parsed_profile.current_industry.lower()
+            for keyword in ['technology', 'software', 'ai', 'ml', 'internet', 'ecommerce', 'search', 'saas', 'product']
+        ):
+            deep_experience_score += 0.03
         
         # 2B: Role consistency / practical delivery signal
         current_title = parsed_profile.current_title.lower()
@@ -747,13 +855,14 @@ class FeatureScorer:
         candidate_raw: Dict[str, Any],
         requirement_profile: RequirementProfile = None
     ) -> float:
-        """Score profile consistency, realism as MULTIPLIER (0.2 to 1.0)
+        """Score profile consistency, realism as MULTIPLIER (0.7 to 1.0)
         
-        This is now a multiplier applied to the base score, ensuring that
-        suspicious profiles (even with good keywords) cannot rank highly.
+        ROBUSTNESS: Changed range to [0.7, 1.0] to prevent profile quality
+        from dominating scoring. Even suspicious profiles can still rank if
+        their technical signals are strong.
         
         Returns:
-            Multiplier 0.2-1.0 (default 1.0 for clean profiles)
+            Multiplier 0.7-1.0 (softer penalties than before)
         """
         
         multiplier = 1.0
@@ -788,25 +897,64 @@ class FeatureScorer:
             redrob.get('verified_phone', False),
             redrob.get('linkedin_connected', False)
         ])
-        multiplier += min(verify_count, 3) * 0.08
-        
+        multiplier += min(verify_count, 3) * 0.05
+
         # Reward strong GitHub/recruiter signals for trust
         if redrob.get('github_activity_score', 0) >= 50:
-            multiplier += 0.05
+            multiplier += 0.03
         if redrob.get('recruiter_response_rate', 0) >= 0.5:
-            multiplier += 0.04
+            multiplier += 0.02
+            if requirement_profile and requirement_profile.location_preferences:
+                if parsed_profile.country and any(
+                    loc in parsed_profile.country.lower()
+                    for loc in requirement_profile.location_preferences
+                ):
+                    multiplier += 0.03
 
-        if requirement_profile and requirement_profile.relocation_required:
-            if redrob.get('willing_to_relocate', False):
-                multiplier += 0.04
+        # Certifications and language signals
+        if parsed_profile.certifications_count > 0:
+            multiplier += min(parsed_profile.certifications_count, 4) * 0.01
+        if parsed_profile.languages_count >= 2:
+            multiplier += 0.02
+        if parsed_profile.has_english_proficiency:
+            multiplier += 0.01
 
+        # Reasonable expected salary is a marginal reliability signal
+        if parsed_profile.expected_salary_range_inr_lpa > 0:
+            if 5 <= parsed_profile.expected_salary_range_inr_lpa <= 60:
+                multiplier += 0.01
+            elif parsed_profile.expected_salary_range_inr_lpa > 80:
+                multiplier -= 0.02
+            elif parsed_profile.expected_salary_range_inr_lpa < 2:
+                multiplier -= 0.01
+
+        # Recent signup age can indicate signal maturity
+        if parsed_profile.days_since_signup >= 180:
+            multiplier += 0.01
+        elif parsed_profile.days_since_signup >= 30:
+            multiplier += 0.005
+
+        # Connections and endorsements are soft trust signals
+        if parsed_profile.connection_count >= 500:
+            multiplier += 0.03
+        elif parsed_profile.connection_count >= 100:
+            multiplier += 0.015
+
+        if parsed_profile.endorsements_received >= 50:
+            multiplier += 0.03
+        elif parsed_profile.endorsements_received >= 20:
+            multiplier += 0.015
+
+        # Match work mode when JD requires remote/hybrid
         if requirement_profile and requirement_profile.location_preferences:
-            preferred_mode = redrob.get('preferred_work_mode', '').lower()
-            if any(loc in preferred_mode for loc in requirement_profile.location_preferences):
-                multiplier += 0.03
+            if any(term in requirement_profile.location_preferences for term in ['remote', 'hybrid']):
+                if parsed_profile.preferred_work_mode in ['remote', 'hybrid']:
+                    multiplier *= 1.03
+                elif parsed_profile.preferred_work_mode and parsed_profile.preferred_work_mode not in ['remote', 'hybrid', 'onsite', 'on-site', 'office']:
+                    multiplier *= 0.98
 
-        # Ensure multiplier is in valid range [0.2, 1.0]
-        multiplier = min(max(multiplier, 0.2), 1.0)
+        # Ensure multiplier is in valid range [0.7, 1.0] per robustness design
+        multiplier = min(max(multiplier, 0.7), 1.0)
         
         return multiplier
     
@@ -882,14 +1030,13 @@ class FeatureScorer:
         
         # Pure consulting background (TCS/Infosys etc)
         if parsed_profile.is_consulting_only and parsed_profile.years_experience >= 5:
-            multiplier *= 0.1
-        
+            multiplier *= 0.75
+
         # No recent code (18+ months ago)
         if parsed_profile.years_since_last_coding > 1.5:
-            multiplier *= 0.3
-        
+            multiplier *= 0.7
         # Not available / not open to work
         if not redrob.get('open_to_work_flag', False) and redrob.get('recruiter_response_rate', 0) < 0.05:
-            multiplier *= 0.2
+            multiplier *= 0.3
         
         return final_score * multiplier

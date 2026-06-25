@@ -201,20 +201,19 @@ class HoneypotDetector:
         
         # Check for suspicious skill distribution
         if self._has_suspicious_skills(candidate):
-            risk += 0.15
-        
+            risk += 0.10
+
         # Check for career inconsistencies
         if self._has_career_inconsistency(parsed_profile):
-            risk += 0.15
-        
+            risk += 0.10
+
         # Check for excessive expert skills ratio
         if self._has_excessive_expert_skills(candidate, parsed_profile.years_experience):
-            risk += 0.20
+            risk += 0.15
 
         # Check for expert/mastery skills with zero reported duration
         if self._has_mastery_without_duration(candidate):
-            risk += 0.15
-        
+            risk += 0.10
         # Check for generic profile
         if self._is_generic_profile(parsed_profile, candidate):
             risk += 0.05

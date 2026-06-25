@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent / "backend"))
 from engines.candidate_profile_parser import CandidateProfileParser
 from engines.feature_scorer import FeatureScorer
 from engines.embedding_retrieval import EmbeddingRetriever, BM25Retriever
+from engines.recruiter_jd_parser import RequirementProfile
 
 
 def load_sample_candidates(num_samples=10):
@@ -49,6 +50,8 @@ def test_profile_parser():
             print(f"  ✓ Company type: {parsed.company_type}")
             print(f"  ✓ Consulting only: {parsed.is_consulting_only}")
             print(f"  ✓ Skills: {parsed.skill_counts}")
+            print(f"  ✓ Certifications: {parsed.certifications_count}")
+            print(f"  ✓ Languages: {parsed.languages_count}")
             print(f"  ✓ Timeline issues: {len(parsed.timeline_issues)}")
             
             # Red flags
@@ -108,6 +111,87 @@ def test_feature_scorer():
             return False
     
     print("\n✓ Feature Scorer Tests Passed")
+    return True
+
+
+def test_feature_scorer_with_location_preferences():
+    print("\n" + "="*60)
+    print("TEST 2.1: Feature Scorer Location Preference")
+    print("="*60)
+
+    candidate = {
+        'candidate_id': 'CAND_TEST',
+        'profile': {
+            'current_title': 'Senior AI Engineer',
+            'current_company': 'Acme Labs',
+            'headline': 'Senior AI Engineer',
+            'summary': 'Built production machine learning systems.',
+            'location': 'Pune',
+            'country': 'India',
+            'years_of_experience': 6
+        },
+        'career_history': [
+            {
+                'company': 'Acme Labs',
+                'title': 'Senior AI Engineer',
+                'start_date': '2021-01-01',
+                'end_date': None,
+                'duration_months': 42,
+                'is_current': True,
+                'industry': 'Technology',
+                'company_size': '1001-5000',
+                'description': 'Built production ML systems for customer-facing products.'
+            }
+        ],
+        'skills': [
+            {'name': 'Python', 'proficiency': 'expert', 'endorsements': 12, 'duration_months': 36}
+        ],
+        'education': [
+            {'institution': 'Tech University', 'degree': 'B.E.', 'field_of_study': 'Computer Science', 'start_year': 2012, 'end_year': 2016, 'grade': '8.5 CGPA', 'tier': 'tier_2'}
+        ],
+        'certifications': [],
+        'languages': [{'language': 'English', 'proficiency': 'professional'}],
+        'redrob_signals': {
+            'profile_completeness_score': 85,
+            'interview_completion_rate': 0.95,
+            'offer_acceptance_rate': 0.8,
+            'avg_response_time_hours': 12,
+            'recruiter_response_rate': 0.7,
+            'open_to_work_flag': True,
+            'github_activity_score': 75,
+            'willing_to_relocate': True
+        }
+    }
+
+    parser = CandidateProfileParser()
+    scorer = FeatureScorer(parser)
+    parsed = parser.parse_candidate(candidate)
+    requirement_profile = RequirementProfile(
+        required_keywords=set(),
+        preferred_keywords=set(),
+        negative_signals=set(),
+        target_experience_min=5,
+        target_experience_max=8,
+        location_preferences=['pune'],
+        relocation_required=False,
+        hands_on_coding=False,
+        leadership_required=False
+    )
+
+    try:
+        components = scorer.score_candidate(
+            candidate,
+            parsed,
+            semantic_similarity=0.5,
+            requirement_profile=requirement_profile
+        )
+        print(f"  ✓ Profile Quality: {components.profile_quality_multiplier:.3f}")
+        print(f"  ✓ Final Score: {components.final_score:.3f}")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        return False
+
+    print("\n✓ Feature Scorer Location Preference Test Passed")
     return True
 
 

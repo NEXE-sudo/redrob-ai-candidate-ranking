@@ -5,6 +5,7 @@ Uses Sentence Transformers for embedding generation.
 OPTIMIZATIONS: BM25 vectorization, FAISS thread config
 """
 
+import re
 import numpy as np
 from pathlib import Path
 from typing import List, Tuple
@@ -70,7 +71,7 @@ class BM25Retriever:
                 text_parts.append(role.get('description', ''))
             
             combined_text = ' '.join([t for t in text_parts if t])
-            tokens = combined_text.lower().split()
+            tokens = re.findall(r'\b[a-z0-9]+\b', combined_text.lower())
             corpus.append(tokens)
         
         self.corpus = corpus
@@ -83,7 +84,7 @@ class BM25Retriever:
         if self.bm25 is None:
             raise ValueError("Index not built. Call build_index() first.")
         
-        tokens = query_text.lower().split()
+        tokens = re.findall(r'\b[a-z0-9]+\b', query_text.lower())
         scores = self.bm25.get_scores(tokens)
         
         # PHASE 7: Use vectorized numpy operations for top-k selection

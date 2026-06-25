@@ -70,7 +70,7 @@ class RecruiterCentricJDParser:
     
     def parse_jd(self, jd_text: str) -> RequirementProfile:
         """Parse JD into structured requirements"""
-        text_lower = jd_text.lower()
+        text_lower = self._normalize_text(jd_text)
         
         # Extract required keywords
         required = set()
@@ -160,7 +160,14 @@ class RecruiterCentricJDParser:
             if loc in text:
                 locations.append(loc)
         return locations
-    
+
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for consistent keyword matching."""
+        text = text.lower()
+        text = re.sub(r"[^a-z0-9\s]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
     def _detect_relocation_required(self, text: str) -> bool:
         """Detect if relocation is required"""
         keywords = [
@@ -168,19 +175,20 @@ class RecruiterCentricJDParser:
             'open to relocation', 'open to relocate', 'relocate if needed'
         ]
         return any(kw in text for kw in keywords)
-    
+
     def _detect_hands_on_coding(self, text: str) -> bool:
         """Detect if hands-on coding is required"""
         keywords = [
             'hands-on', 'hands on', 'coding', 'engineering',
-            'implementation', 'write code', 'development'
+            'implementation', 'write code', 'development', 'technical delivery',
+            'build systems', 'ship products', 'product delivery'
         ]
         return any(kw in text for kw in keywords)
-    
+
     def _detect_leadership(self, text: str) -> bool:
         """Detect if leadership is required"""
         keywords = [
             'lead', 'manage', 'mentor', 'leadership', 'team',
-            'principal', 'staff'
+            'principal', 'staff', 'head of', 'director', 'manager'
         ]
         return any(kw in text for kw in keywords)

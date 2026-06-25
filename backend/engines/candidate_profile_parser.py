@@ -41,6 +41,20 @@ class ParsedProfile:
     interview_completion_rate: float  # from redrob_signals
     offer_acceptance_rate: float      # from redrob_signals, -1 means no history
     avg_response_time_hours: float    # from redrob_signals
+    current_industry: str
+    current_company_size: str
+    country: str
+    certifications_count: int
+    certification_names: List[str]
+    languages_count: int
+    language_names: List[str]
+    has_english_proficiency: bool
+    connection_count: int
+    endorsements_received: int
+    expected_salary_range_inr_lpa: float
+    preferred_work_mode: str
+    signup_date: str
+    days_since_signup: float
     top_skill_trust_scores: dict      # {skill_name: trust_score} for top 10 skills
 
 
@@ -118,6 +132,9 @@ class CandidateProfileParser:
         years_experience = profile.get('years_of_experience', 0.0)
         current_title = profile.get('current_title', '')
         current_company = profile.get('current_company', '')
+        current_company_size = profile.get('current_company_size', '')
+        current_industry = profile.get('current_industry', '')
+        country = profile.get('country', '')
         summary = profile.get('summary', '')
         headline = profile.get('headline', '')
         
@@ -132,6 +149,20 @@ class CandidateProfileParser:
         skill_counts = len(skills)
         endorsements = [s['endorsements'] for s in skills]
         skill_endorsements_mean = sum(endorsements) / len(endorsements) if endorsements else 0
+
+        # Certifications and languages
+        certifications = candidate_raw.get('certifications', [])
+        certifications_count = len(certifications)
+        certification_names = [c.get('name', '').lower() for c in certifications]
+
+        languages = candidate_raw.get('languages', [])
+        languages_count = len(languages)
+        language_names = [l.get('language', '').lower() for l in languages]
+        has_english_proficiency = any(
+            l.get('language', '').lower() == 'english' and
+            l.get('proficiency', '').lower() in ['professional', 'full professional', 'native', 'bilingual', 'fluent']
+            for l in languages
+        )
         
         # Career depth
         career_depth_months = self._analyze_career_depth(career_history)
@@ -199,11 +230,25 @@ class CandidateProfileParser:
         raw_acceptance = redrob_signals.get("offer_acceptance_rate", -1)
         offer_acceptance_rate = raw_acceptance  # keep -1 as sentinel for no history
         avg_response_time_hours = redrob_signals.get("avg_response_time_hours", 24.0)
+        connection_count = redrob_signals.get('connection_count', 0)
+        endorsements_received = redrob_signals.get('endorsements_received', 0)
+        expected_salary_range = redrob_signals.get('expected_salary_range_inr_lpa', 0.0)
+        expected_salary_range_inr_lpa = self._normalize_salary_range(expected_salary_range)
+        preferred_work_mode = str(redrob_signals.get('preferred_work_mode', '')).lower()
+        signup_date = redrob_signals.get('signup_date', '')
 
         # GitHub signal
         github_score = redrob_signals.get('github_activity_score', -1)
         has_github = github_score >= 0
         github_activity_score = max(0, github_score)
+
+        days_since_signup = 999.0
+        if signup_date:
+            try:
+                signup_dt = datetime.strptime(signup_date, '%Y-%m-%d')
+                days_since_signup = (reference_date - signup_dt).days
+            except ValueError:
+                days_since_signup = 999.0
 
         # Skill trust scores — compute per skill
         # trust = proficiency_weight * 0.4 + duration_weight * 0.4 + endorsement_weight * 0.2
@@ -247,12 +292,47 @@ class CandidateProfileParser:
             interview_completion_rate=interview_completion_rate,
             offer_acceptance_rate=offer_acceptance_rate,
             avg_response_time_hours=avg_response_time_hours,
+            current_industry=current_industry,
+            current_company_size=current_company_size,
+            country=country,
+            certifications_count=certifications_count,
+            certification_names=certification_names,
+            languages_count=languages_count,
+            language_names=language_names,
+            has_english_proficiency=has_english_proficiency,
+            connection_count=connection_count,
+            endorsements_received=endorsements_received,
+            expected_salary_range_inr_lpa=expected_salary_range_inr_lpa,
+            preferred_work_mode=preferred_work_mode,
+            signup_date=signup_date,
+            days_since_signup=days_since_signup,
             total_years_experience=years_experience,
             summary=summary,
             headline=headline,
             top_skill_trust_scores=top_skill_trust_scores
         )
-    
+
+    def _normalize_salary_range(self, salary_range: Any) -> float:
+        """Normalize salary range values to a single annual LPA number."""
+        if isinstance(salary_range, dict):
+            min_val = salary_range.get('min')
+            max_val = salary_range.get('max')
+            if isinstance(min_val, (int, float)) and isinstance(max_val, (int, float)):
+                return (min_val + max_val) / 2.0
+            if isinstance(min_val, (int, float)):
+                return float(min_val)
+            if isinstance(max_val, (int, float)):
+                return float(max_val)
+            return 0.0
+        if isinstance(salary_range, (int, float)):
+            return float(salary_range)
+        if isinstance(salary_range, str):
+            try:
+                return float(salary_range)
+            except ValueError:
+                return 0.0
+        return 0.0
+
     def _classify_company(self, career_history: List[Dict]) -> Tuple[str, bool]:
         """Determine company type and if consulting-only"""
         

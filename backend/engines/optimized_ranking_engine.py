@@ -144,6 +144,12 @@ class OptimizedRankingEngine:
 
         # Extract structured skill keywords for trust scoring
         self.jd_skill_keywords = self._extract_jd_skill_keywords(self.jd_text)
+        # Augment with recruiter-parsed required/preferred terms
+        self.jd_skill_keywords = list(dict.fromkeys(
+            self.jd_skill_keywords +
+            list(self.requirement_profile.required_keywords) +
+            list(self.requirement_profile.preferred_keywords)
+        ))
         print(f"  JD skill keywords: {self.jd_skill_keywords}")
         
         # Print extracted requirements (Phase 2 telemetry)

@@ -66,18 +66,29 @@ class CrossEncoderReranker:
         if profile.get('summary'):
             text_parts.append(f"Summary: {profile['summary']}")
         
-        # Top skills (max 15)
+        # Top skills (max 20)
         skills = candidate.get('skills', [])
         if skills:
-            skill_names = [s['name'] for s in skills[:15]]
+            skill_names = [s['name'] for s in skills[:20]]
             text_parts.append(f"Skills: {', '.join(skill_names)}")
         
-        # Most recent 3 roles
+        # Summary fields
+        profile = candidate.get('profile', {})
+        if profile.get('years_of_experience') is not None:
+            text_parts.append(f"Years of experience: {profile.get('years_of_experience')}")
+        if profile.get('current_company'):
+            text_parts.append(f"Current company: {profile.get('current_company')}")
+
+        # Most recent 5 roles
         career = candidate.get('career_history', [])
         if career:
             text_parts.append("Career History:")
-            for role in career[:3]:
+            for role in career[:5]:
                 role_text = f"  {role.get('title', '')} at {role.get('company', '')}"
+                if role.get('start_date') or role.get('end_date'):
+                    start_date = role.get('start_date') or 'unknown'
+                    end_date = role.get('end_date') or 'present'
+                    role_text += f" ({start_date} - {end_date})"
                 if role.get('description'):
                     role_text += f": {role['description'][:200]}"
                 text_parts.append(role_text)
