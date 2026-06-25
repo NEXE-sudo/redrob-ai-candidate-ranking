@@ -169,7 +169,8 @@ class OptimizedRankingEngine:
             'online evaluation', 'production', 'scale', 'recommendation', 'rag',
             'startup', 'product', 'ml', 'python', 'llm', 'distributed'
         ]
-        keywords = [phrase for phrase in candidate_phrases if phrase in text]
+        # Use word-boundary matching to avoid short-token collisions (e.g. 'map' in 'roadmap')
+        keywords = [phrase for phrase in candidate_phrases if re.search(r"\b" + re.escape(phrase) + r"\b", text)]
         if not keywords:
             keywords = re.findall(r"\b[ a-z]{3,}\b", text)[:10]
         return list(dict.fromkeys(keywords))
@@ -191,7 +192,8 @@ class OptimizedRankingEngine:
             "a/b testing", "experimentation", "production ml",
             "xgboost", "lightgbm", "spark", "distributed systems"
         ]
-        return [term for term in skill_terms if term in jd_lower]
+        # Word-boundary match for skills to avoid substring false-positives
+        return [term for term in skill_terms if re.search(r"\b" + re.escape(term) + r"\b", jd_lower)]
     
     def _load_or_build_faiss_index(self):
         """Load cached embeddings and FAISS index, or build them once (PHASE 4-5: Strict cache-first, PHASE 6: Memory mapping)."""
@@ -392,11 +394,14 @@ class OptimizedRankingEngine:
 
             # Use ScoringComponents.final_score plus auxiliary ranking signals.
             # This ensures product/career/retrieval evaluation strength influences final rank.
+            # Combine auxiliary signals (do NOT double-count evaluation framework;
+            # `components.final_score` already contains the advanced scorer's
+            # `evaluation_framework_score`). Keep eval_framework_score only for
+            # reporting/reasoning, not as an extra additive boost.
             auxiliary_bonus = (
                 career_traj_score * 0.02 +
                 product_fit_score * 0.02 +
-                retrieval_depth_score * 0.015 +
-                eval_framework_score * 0.02
+                retrieval_depth_score * 0.015
             )
             final_score = max((components.final_score + auxiliary_bonus) * honeypot_penalty, 0.0)
 
@@ -424,12 +429,8 @@ class OptimizedRankingEngine:
         stage_timings['feature_scoring'] = (datetime.now() - t0).total_seconds()
         print(f"  ✓ Scored {len(scored_candidates)} candidates ({stage_timings['feature_scoring']:.1f}s)")
 
-        # Normalize final scores across all scored candidates so top candidate is 1.0
-        if scored_candidates:
-            max_raw = max(s['final_score'] for s in scored_candidates)
-            if max_raw > 0:
-                for s in scored_candidates:
-                    s['final_score'] = s['final_score'] / max_raw
+        # Do not rescale scores by pool max. Keep absolute scores so they are
+        # comparable across runs and do not mask upstream weighting bugs.
 
         # Stage 5: Sort and finalize
         print(f"\n[Stage 5] Finalizing top {top_k}...")
@@ -565,11 +566,22 @@ class OptimizedRankingEngine:
             return 0, 0, 0
 
         candidate_text = self.feature_scorer._collect_candidate_text(candidate_raw, parsed_profile)
-        candidate_text = candidate_text.lower()
+        # Normalize text for robust matching
+        candidate_text = self.feature_scorer._normalize_text(candidate_text)
 
-        required = sum(1 for kw in self.requirement_profile.required_keywords if kw in candidate_text)
-        preferred = sum(1 for kw in self.requirement_profile.preferred_keywords if kw in candidate_text)
-        negatives = sum(1 for kw in self.requirement_profile.negative_signals if kw in candidate_text)
+        def _match_set(keyword_set):
+            count = 0
+            for kw in keyword_set:
+                kw_norm = self.feature_scorer._normalize_text(str(kw))
+                if not kw_norm:
+                    continue
+                if re.search(r"\b" + re.escape(kw_norm) + r"\b", candidate_text):
+                    count += 1
+            return count
+
+        required = _match_set(self.requirement_profile.required_keywords)
+        preferred = _match_set(self.requirement_profile.preferred_keywords)
+        negatives = _match_set(self.requirement_profile.negative_signals)
 
         return required, preferred, negatives
 

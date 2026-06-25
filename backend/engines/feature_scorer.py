@@ -37,18 +37,36 @@ class ScoringComponents:
         Weights designed to make title + trust skills + assessments
         decisive so that keyword stuffers cannot rank highly.
         """
-        base = (
-            self.title_relevance        * 0.25 +
-            self.skill_trust_score      * 0.22 +
-            self.assessment_score       * 0.18 +
-            self.technical_relevance    * 0.12 +
-            self.production_experience  * 0.08 +
-            self.experience_level_fit   * 0.06 +
-            self.education_score        * 0.03 +
-            self.evaluation_framework_score * 0.03 +
-            self.product_mindset_score   * 0.03 +
-            self.semantic_similarity    * 0.10
+        # Use explicit weights but normalize them so they sum to 1.0.
+        # This prevents accidental drift when individual weights are adjusted.
+        weights = {
+            'title_relevance': 0.25,
+            'skill_trust_score': 0.22,
+            'assessment_score': 0.18,
+            'technical_relevance': 0.12,
+            'production_experience': 0.08,
+            'experience_level_fit': 0.06,
+            'education_score': 0.03,
+            'evaluation_framework_score': 0.03,
+            'product_mindset_score': 0.03,
+            'semantic_similarity': 0.10
+        }
+
+        base_raw = (
+            self.title_relevance        * weights['title_relevance'] +
+            self.skill_trust_score      * weights['skill_trust_score'] +
+            self.assessment_score       * weights['assessment_score'] +
+            self.technical_relevance    * weights['technical_relevance'] +
+            self.production_experience  * weights['production_experience'] +
+            self.experience_level_fit   * weights['experience_level_fit'] +
+            self.education_score        * weights['education_score'] +
+            self.evaluation_framework_score * weights['evaluation_framework_score'] +
+            self.product_mindset_score   * weights['product_mindset_score'] +
+            self.semantic_similarity    * weights['semantic_similarity']
         )
+
+        sum_weights = sum(weights.values()) or 1.0
+        base = base_raw / sum_weights
 
         final = base * self.profile_quality_multiplier * self.behavioral_multiplier
         return max(final, 0.0)

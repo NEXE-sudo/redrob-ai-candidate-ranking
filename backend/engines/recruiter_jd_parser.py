@@ -72,22 +72,25 @@ class RecruiterCentricJDParser:
         """Parse JD into structured requirements"""
         text_lower = self._normalize_text(jd_text)
         
-        # Extract required keywords
+        # Extract required keywords (use word-boundary matching to avoid short-token collisions)
         required = set()
         for keyword in self.REQUIRED_KEYWORDS:
-            if keyword in text_lower:
+            kw_norm = self._normalize_text(keyword)
+            if kw_norm and re.search(r"\b" + re.escape(kw_norm) + r"\b", text_lower):
                 required.add(keyword)
         
-        # Extract preferred keywords
+        # Extract preferred keywords (word-boundary matching)
         preferred = set()
         for keyword in self.PREFERRED_KEYWORDS:
-            if keyword in text_lower:
+            kw_norm = self._normalize_text(keyword)
+            if kw_norm and re.search(r"\b" + re.escape(kw_norm) + r"\b", text_lower):
                 preferred.add(keyword)
         
-        # Extract negative signals
+        # Extract negative signals (word-boundary matching)
         negatives = set()
         for signal in self.NEGATIVE_SIGNALS:
-            if signal in text_lower:
+            sig_norm = self._normalize_text(signal)
+            if sig_norm and re.search(r"\b" + re.escape(sig_norm) + r"\b", text_lower):
                 negatives.add(signal)
         
         # Extract experience range
