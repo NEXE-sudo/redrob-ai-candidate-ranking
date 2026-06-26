@@ -145,9 +145,9 @@ class CandidateProfileParser:
         profile_completeness = redrob_signals.get('profile_completeness_score', 0.0)
         
         # Skill analysis
-        skill_names = [s['name'] for s in skills]
+        skill_names = [s.get('name', '') for s in skills]
         skill_counts = len(skills)
-        endorsements = [s['endorsements'] for s in skills]
+        endorsements = [s.get('endorsements', 0) for s in skills]
         skill_endorsements_mean = sum(endorsements) / len(endorsements) if endorsements else 0
 
         # Certifications and languages
@@ -340,9 +340,9 @@ class CandidateProfileParser:
         is_consulting_only = True
         
         for role in career_history:
-            company = role['company'].lower()
-            industry = role['industry'].lower()
-            company_size = role['company_size']
+            company = role.get('company', '').lower()
+            industry = role.get('industry', '').lower()
+            company_size = role.get('company_size', '')
             
             # Check if consulting
             is_consulting = any(
@@ -381,9 +381,9 @@ class CandidateProfileParser:
         }
         
         for role in career_history:
-            title = role['title'].lower()
-            duration = role['duration_months']
-            description = role['description'].lower()
+            title = role.get('title', '').lower()
+            duration = role.get('duration_months', 0)
+            description = role.get('description', '').lower()
             
             depth['total_months'] += duration
             
@@ -412,7 +412,7 @@ class CandidateProfileParser:
         # Sort by end date descending (most recent first)
         sorted_history = sorted(
             career_history,
-            key=lambda x: x['end_date'] or '2099-12-31',
+            key=lambda x: x.get('end_date') or '2099-12-31',
             reverse=True
         )
         
@@ -441,13 +441,14 @@ class CandidateProfileParser:
                             f"Large gap ({gap_days} days) between {current_role.get('company', '')} and {next_role.get('company', '')}"
                         )
             except (ValueError, TypeError):
-                issues.append(f"Could not parse dates for role at {current_role['company']}")
+                issues.append(f"Could not parse dates for role at {current_role.get('company', 'Unknown')}")
                 continue
         
         # Check for very short roles
         for role in career_history:
-            if role['duration_months'] < 1 and not role['is_current']:
-                issues.append(f"Very short role ({role['duration_months']} months) at {role['company']}")
+            dur = role.get('duration_months', 0)
+            if dur < 1 and not role.get('is_current', False):
+                issues.append(f"Very short role ({dur} months) at {role.get('company', 'Unknown')}")
         
         return issues
 

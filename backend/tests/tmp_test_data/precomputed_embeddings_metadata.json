@@ -1,0 +1,10 @@
+{
+  "total_candidates": 6,
+  "embedding_dim": 768,
+  "model_name": "sentence-transformers/all-mpnet-base-v2",
+  "created_at": "2026-06-27T04:35:07.211492",
+  "embeddings_file": "/Users/kartik/Documents/redrob-ai-candidate-ranking/backend/tests/tmp_test_data/precomputed_embeddings_embeddings.npy",
+  "ids_file": "/Users/kartik/Documents/redrob-ai-candidate-ranking/backend/tests/tmp_test_data/precomputed_embeddings_ids.pkl",
+  "faiss_index_file": "/Users/kartik/Documents/redrob-ai-candidate-ranking/backend/tests/tmp_test_data/precomputed_embeddings_faiss.index",
+  "num_batches": 1
+}

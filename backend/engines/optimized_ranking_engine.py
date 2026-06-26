@@ -351,83 +351,103 @@ class OptimizedRankingEngine:
         t0 = datetime.now()
         
         scored_candidates = []
+        seen_candidates = set()
+        telemetry = {
+            'skipped_candidates': 0,
+            'invalid_candidates': 0,
+            'duplicate_candidates': 0
+        }
+        
         for i, candidate_id in enumerate(faiss_ids):
             if i % 100 == 0:
                 elapsed = (datetime.now() - t0).total_seconds()
                 print(f"  Scoring {i}/{len(faiss_ids)} ({elapsed:.1f}s)...")
             
+            if candidate_id in seen_candidates:
+                telemetry['duplicate_candidates'] += 1
+                continue
+            seen_candidates.add(candidate_id)
+            
             # Lookup candidate by ID
             candidate = self.candidates_by_id.get(candidate_id)
             if not candidate:
+                telemetry['skipped_candidates'] += 1
                 continue
             
-            # Parse profile
-            if candidate_id not in self.parsed_profiles:
-                parsed = self.parser.parse_candidate(candidate)
-                self.parsed_profiles[candidate_id] = parsed
-            else:
-                parsed = self.parsed_profiles[candidate_id]
-            
-            # Phase 3: Score with all components
-            raw_sem = faiss_score_map.get(candidate_id, 0.0)
-            semantic_sim = 1.0 / (1.0 + math.exp(-raw_sem))
-            components = self.feature_scorer.score_candidate(
-                candidate,
-                parsed,
-                semantic_similarity=semantic_sim,
-                advanced_scorer=self.advanced_scorer,
-                jd_skill_keywords=self.jd_skill_keywords,
-                requirement_profile=self.requirement_profile
-            )
-            
-            # Phase 3: Add new component scores
-            career_traj_score = self.career_trajectory_analyzer.score(parsed, candidate)
-            product_fit_score = self.product_company_scorer.score(parsed, candidate)
-            retrieval_depth_score = self.retrieval_depth_scorer.score(candidate)
-            eval_framework_score = self.evaluation_framework_scorer.score(candidate)
-            
-            # Phase 4: Honeypot detection
-            honeypot_penalty = 1.0
-            if self.honeypot_detector:
-                risk_score = self.honeypot_detector.calculate_risk_score(parsed, candidate)
-                honeypot_penalty = self.honeypot_detector.get_penalty_multiplier(risk_score)
+            try:
+                # Parse profile
+                if candidate_id not in self.parsed_profiles:
+                    parsed = self.parser.parse_candidate(candidate)
+                    self.parsed_profiles[candidate_id] = parsed
+                else:
+                    parsed = self.parsed_profiles[candidate_id]
+                
+                # Phase 3: Score with all components
+                raw_sem = faiss_score_map.get(candidate_id, 0.0)
+                semantic_sim = 1.0 / (1.0 + math.exp(-raw_sem))
+                components = self.feature_scorer.score_candidate(
+                    candidate,
+                    parsed,
+                    semantic_similarity=semantic_sim,
+                    advanced_scorer=self.advanced_scorer,
+                    jd_skill_keywords=self.jd_skill_keywords,
+                    requirement_profile=self.requirement_profile
+                )
+                
+                # Phase 3: Add new component scores
+                career_traj_score = self.career_trajectory_analyzer.score(parsed, candidate)
+                product_fit_score = self.product_company_scorer.score(parsed, candidate)
+                retrieval_depth_score = self.retrieval_depth_scorer.score(candidate)
+                eval_framework_score = self.evaluation_framework_scorer.score(candidate)
+                
+                # Phase 4: Honeypot detection
+                honeypot_penalty = 1.0
+                if self.honeypot_detector:
+                    risk_score = self.honeypot_detector.calculate_risk_score(parsed, candidate)
+                    honeypot_penalty = self.honeypot_detector.get_penalty_multiplier(risk_score)
 
-            # Use ScoringComponents.final_score plus auxiliary ranking signals.
-            # This ensures product/career/retrieval evaluation strength influences final rank.
-            # Combine auxiliary signals (do NOT double-count evaluation framework;
-            # `components.final_score` already contains the advanced scorer's
-            # `evaluation_framework_score`). Keep eval_framework_score only for
-            # reporting/reasoning, not as an extra additive boost.
-            auxiliary_bonus = (
-                career_traj_score * 0.02 +
-                product_fit_score * 0.02 +
-                retrieval_depth_score * 0.015
-            )
-            final_score = max((components.final_score + auxiliary_bonus) * honeypot_penalty, 0.0)
+                auxiliary_bonus = (
+                    career_traj_score * 0.02 +
+                    product_fit_score * 0.02 +
+                    retrieval_depth_score * 0.015
+                )
+                final_score = max((components.final_score + auxiliary_bonus) * honeypot_penalty, 0.0)
 
-            # Apply additional disqualifiers (consulting-only etc.)
-            final_score = self.feature_scorer.apply_disqualifying_factors(
-                final_score,
-                parsed,
-                candidate
-            )
-            
-            scored_candidates.append({
-                'candidate_id': candidate_id,
-                'final_score': final_score,
-                'components': components,
-                'semantic_similarity': semantic_sim,
-                'parsed_profile': parsed,
-                'candidate_data': candidate,
-                'career_trajectory_score': career_traj_score,
-                'product_fit_score': product_fit_score,
-                'retrieval_depth_score': retrieval_depth_score,
-                'eval_framework_score': eval_framework_score,
-                'honeypot_penalty': honeypot_penalty
-            })
+                # Phase 6: Calibration - explicit cap
+                final_score = min(final_score, 1.0)
+
+                # Apply additional disqualifiers (consulting-only etc.)
+                if hasattr(self.feature_scorer, 'apply_disqualifying_factors'):
+                    final_score = self.feature_scorer.apply_disqualifying_factors(
+                        final_score,
+                        parsed,
+                        candidate
+                    )
+                
+                scored_candidates.append({
+                    'candidate_id': candidate_id,
+                    'final_score': final_score,
+                    'components': components,
+                    'semantic_similarity': semantic_sim,
+                    'parsed_profile': parsed,
+                    'candidate_data': candidate,
+                    'career_trajectory_score': career_traj_score,
+                    'product_fit_score': product_fit_score,
+                    'retrieval_depth_score': retrieval_depth_score,
+                    'eval_framework_score': eval_framework_score,
+                    'honeypot_penalty': honeypot_penalty
+                })
+            except Exception as e:
+                telemetry['invalid_candidates'] += 1
+                print(f"  ⚠ Failed to score candidate {candidate_id}: {e}")
+                continue
         
         stage_timings['feature_scoring'] = (datetime.now() - t0).total_seconds()
         print(f"  ✓ Scored {len(scored_candidates)} candidates ({stage_timings['feature_scoring']:.1f}s)")
+        if telemetry['skipped_candidates'] > 0 or telemetry['invalid_candidates'] > 0 or telemetry['duplicate_candidates'] > 0:
+            print(f"    - Skipped (not found): {telemetry['skipped_candidates']}")
+            print(f"    - Invalid (errors): {telemetry['invalid_candidates']}")
+            print(f"    - Duplicates ignored: {telemetry['duplicate_candidates']}")
 
         # Do not rescale scores by pool max. Keep absolute scores so they are
         # comparable across runs and do not mask upstream weighting bugs.
@@ -443,7 +463,7 @@ class OptimizedRankingEngine:
             scored['rounded_score'] = round(scored['final_score'], 4)
 
         scored_candidates.sort(
-            key=lambda x: (-x['rounded_score'], x['candidate_id'])
+            key=lambda x: (-x['rounded_score'], -x['semantic_similarity'], x['candidate_id'])
         )
         top_candidates = scored_candidates[:top_k]
         
@@ -510,6 +530,30 @@ class OptimizedRankingEngine:
         print(f"\nTop 5 Candidates:")
         for result in results[:5]:
             print(f"  {result['rank']}. {result['candidate_id']} ({result['final_score']:.4f})")
+        print("\n[Phase 3] Feature Importance Analysis (Top 100 Averages):")
+        if top_candidates:
+            num_candidates = len(top_candidates)
+            avg_contributions = {
+                'title_relevance': sum(c['components'].title_relevance * 0.25 for c in top_candidates) / num_candidates,
+                'skill_trust_score': sum(c['components'].skill_trust_score * 0.22 for c in top_candidates) / num_candidates,
+                'assessment_score': sum(c['components'].assessment_score * 0.18 for c in top_candidates) / num_candidates,
+                'technical_relevance': sum(c['components'].technical_relevance * 0.12 for c in top_candidates) / num_candidates,
+                'production_experience': sum(c['components'].production_experience * 0.08 for c in top_candidates) / num_candidates,
+                'experience_level_fit': sum(c['components'].experience_level_fit * 0.06 for c in top_candidates) / num_candidates,
+                'education_score': sum(c['components'].education_score * 0.03 for c in top_candidates) / num_candidates,
+                'evaluation_framework_score': sum(c['components'].evaluation_framework_score * 0.03 for c in top_candidates) / num_candidates,
+                'product_mindset_score': sum(c['components'].product_mindset_score * 0.03 for c in top_candidates) / num_candidates,
+                'semantic_similarity': sum(c['components'].semantic_similarity * 0.10 for c in top_candidates) / num_candidates,
+                'behavioral_adjustment': sum((c['components'].behavioral_multiplier - 1.0) * 0.15 for c in top_candidates) / num_candidates,
+                'career_trajectory_score': sum(c.get('career_trajectory_score', 0.0) * 0.02 for c in top_candidates) / num_candidates,
+                'product_fit_score': sum(c.get('product_fit_score', 0.0) * 0.02 for c in top_candidates) / num_candidates,
+            }
+            
+            # Print sorted by contribution
+            sorted_contribs = sorted(avg_contributions.items(), key=lambda x: x[1], reverse=True)
+            for feature, value in sorted_contribs:
+                print(f"  {feature}: {value:.4f}")
+        
         print("="*70 + "\n")
         
         # Phase 9: Store telemetry

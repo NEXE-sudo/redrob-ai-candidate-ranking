@@ -61,8 +61,8 @@ class AdvancedScorer:
         
         # Extract all text
         all_text = (
-            candidate_raw['profile'].get('summary', '').lower() + ' ' +
-            candidate_raw['profile'].get('headline', '').lower()
+            candidate_raw.get('profile', {}).get('summary', '').lower() + ' ' +
+            candidate_raw.get('profile', {}).get('headline', '').lower()
         )
         
         for role in candidate_raw.get('career_history', []):
@@ -114,8 +114,8 @@ class AdvancedScorer:
         
         # Check for startup keywords in profile
         profile_text = (
-            candidate_raw['profile'].get('summary', '').lower() + ' ' +
-            candidate_raw['profile'].get('headline', '').lower()
+            candidate_raw.get('profile', {}).get('summary', '').lower() + ' ' +
+            candidate_raw.get('profile', {}).get('headline', '').lower()
         )
         
         startup_mentions = sum(1 for keyword in self.STARTUP_KEYWORDS if keyword in profile_text)

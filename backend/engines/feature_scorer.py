@@ -68,8 +68,13 @@ class ScoringComponents:
         sum_weights = sum(weights.values()) or 1.0
         base = base_raw / sum_weights
 
-        final = base * self.profile_quality_multiplier * self.behavioral_multiplier
-        return max(final, 0.0)
+        # Phase 2: Fix Score Distortion (bounded additive instead of multiplicative)
+        # Shift multipliers to act as +/- bonuses relative to 1.0 baseline
+        quality_adjustment = (self.profile_quality_multiplier - 1.0) * 0.10
+        behavioral_adjustment = (self.behavioral_multiplier - 1.0) * 0.15
+        
+        final = base + quality_adjustment + behavioral_adjustment
+        return min(max(final, 0.0), 1.0)
 
     @property
     def behavioral_engagement(self) -> float:
@@ -162,7 +167,7 @@ class FeatureScorer:
             evaluation_framework_score = advanced_scorer.score_evaluation_framework(
                 candidate_raw
             )
-            product_mindset_score = advanced_scorer.score_product_mindset(
+            product_mindset_score = advanced_scorer.score_startup_product_mindset(
                 candidate_raw, parsed_profile
             )
 
@@ -228,10 +233,10 @@ class FeatureScorer:
     ) -> str:
         """Collect all candidate text fields for JD matching."""
         profile_text = (
-            candidate_raw['profile'].get('summary', '').lower() + ' ' +
-            candidate_raw['profile'].get('headline', '').lower() + ' ' +
-            candidate_raw['profile'].get('current_title', '').lower() + ' ' +
-            candidate_raw['profile'].get('location', '').lower()
+            candidate_raw.get('profile', {}).get('summary', '').lower() + ' ' +
+            candidate_raw.get('profile', {}).get('headline', '').lower() + ' ' +
+            candidate_raw.get('profile', {}).get('current_title', '').lower() + ' ' +
+            candidate_raw.get('profile', {}).get('location', '').lower()
         )
         career_text = ' '.join([
             role.get('title', '').lower() + ' ' + role.get('description', '').lower()
@@ -698,9 +703,9 @@ class FeatureScorer:
         
         # Concatenate all relevant text
         profile_text = (
-            candidate_raw['profile'].get('summary', '').lower() + ' ' +
-            candidate_raw['profile'].get('headline', '').lower() + ' ' +
-            candidate_raw['profile'].get('current_title', '').lower()
+            candidate_raw.get('profile', {}).get('summary', '').lower() + ' ' +
+            candidate_raw.get('profile', {}).get('headline', '').lower() + ' ' +
+            candidate_raw.get('profile', {}).get('current_title', '').lower()
         )
         
         career_text = ' '.join([
@@ -748,6 +753,21 @@ class FeatureScorer:
             0.25 * tier3_sat
         )
         
+        # Phase 4: Keyword Density Penalty (Anti-stuffing)
+        # If the candidate has many keyword hits but very few total words, penalize them.
+        total_words = len(all_text.split())
+        total_hits = tier1_count + tier2_count + tier3_count
+        
+        if total_words > 0:
+            density = total_hits / total_words
+            # A normal profile rarely exceeds 5-8% density for these specific ML/ranking keywords.
+            if density > 0.15:
+                # Extreme keyword stuffing -> heavy penalty
+                keyword_score *= 0.5
+            elif density > 0.08:
+                # High density -> mild penalty
+                keyword_score *= 0.8
+                
         return min(max(keyword_score, 0.0), 1.0)
     
     def _scale_signal_score(self, candidate_raw: Dict[str, Any]) -> float:
@@ -772,7 +792,7 @@ class FeatureScorer:
         # Company size (most recent)
         most_recent_role = candidate_raw['career_history'][0] if candidate_raw['career_history'] else None
         if most_recent_role:
-            company_size = most_recent_role['company_size']
+            company_size = most_recent_role.get('company_size', '')
             size_numeric = CandidateProfileParser.COMPANY_SIZE_NUMERIC.get(company_size, 0)
             if size_numeric >= 500:
                 score += 0.2
