@@ -533,22 +533,41 @@ class OptimizedRankingEngine:
         print("\n[Phase 3] Feature Importance Analysis (Top 100 Averages):")
         if top_candidates:
             num_candidates = len(top_candidates)
+            # Weights must match ScoringComponents.final_score exactly.
+            # Raw weights sum to 1.10, so the scorer normalizes by dividing by 1.10.
+            # We replicate that normalization here so the printed contributions are accurate.
+            _RAW_WEIGHTS = {
+                'title_relevance': 0.25,
+                'skill_trust_score': 0.22,
+                'assessment_score': 0.18,
+                'technical_relevance': 0.12,
+                'production_experience': 0.08,
+                'experience_level_fit': 0.06,
+                'education_score': 0.03,
+                'evaluation_framework_score': 0.03,
+                'product_mindset_score': 0.03,
+                'semantic_similarity': 0.10,
+            }
+            _SUM_WEIGHTS = sum(_RAW_WEIGHTS.values())  # 1.10
+            _W = {k: v / _SUM_WEIGHTS for k, v in _RAW_WEIGHTS.items()}
+
             avg_contributions = {
-                'title_relevance': sum(c['components'].title_relevance * 0.25 for c in top_candidates) / num_candidates,
-                'skill_trust_score': sum(c['components'].skill_trust_score * 0.22 for c in top_candidates) / num_candidates,
-                'assessment_score': sum(c['components'].assessment_score * 0.18 for c in top_candidates) / num_candidates,
-                'technical_relevance': sum(c['components'].technical_relevance * 0.12 for c in top_candidates) / num_candidates,
-                'production_experience': sum(c['components'].production_experience * 0.08 for c in top_candidates) / num_candidates,
-                'experience_level_fit': sum(c['components'].experience_level_fit * 0.06 for c in top_candidates) / num_candidates,
-                'education_score': sum(c['components'].education_score * 0.03 for c in top_candidates) / num_candidates,
-                'evaluation_framework_score': sum(c['components'].evaluation_framework_score * 0.03 for c in top_candidates) / num_candidates,
-                'product_mindset_score': sum(c['components'].product_mindset_score * 0.03 for c in top_candidates) / num_candidates,
-                'semantic_similarity': sum(c['components'].semantic_similarity * 0.10 for c in top_candidates) / num_candidates,
+                'title_relevance': sum(c['components'].title_relevance * _W['title_relevance'] for c in top_candidates) / num_candidates,
+                'skill_trust_score': sum(c['components'].skill_trust_score * _W['skill_trust_score'] for c in top_candidates) / num_candidates,
+                'assessment_score': sum(c['components'].assessment_score * _W['assessment_score'] for c in top_candidates) / num_candidates,
+                'technical_relevance': sum(c['components'].technical_relevance * _W['technical_relevance'] for c in top_candidates) / num_candidates,
+                'production_experience': sum(c['components'].production_experience * _W['production_experience'] for c in top_candidates) / num_candidates,
+                'experience_level_fit': sum(c['components'].experience_level_fit * _W['experience_level_fit'] for c in top_candidates) / num_candidates,
+                'education_score': sum(c['components'].education_score * _W['education_score'] for c in top_candidates) / num_candidates,
+                'evaluation_framework_score': sum(c['components'].evaluation_framework_score * _W['evaluation_framework_score'] for c in top_candidates) / num_candidates,
+                'product_mindset_score': sum(c['components'].product_mindset_score * _W['product_mindset_score'] for c in top_candidates) / num_candidates,
+                'semantic_similarity': sum(c['components'].semantic_similarity * _W['semantic_similarity'] for c in top_candidates) / num_candidates,
+                # Additive adjustments (not part of normalized base; shown separately)
                 'behavioral_adjustment': sum((c['components'].behavioral_multiplier - 1.0) * 0.15 for c in top_candidates) / num_candidates,
                 'career_trajectory_score': sum(c.get('career_trajectory_score', 0.0) * 0.02 for c in top_candidates) / num_candidates,
                 'product_fit_score': sum(c.get('product_fit_score', 0.0) * 0.02 for c in top_candidates) / num_candidates,
             }
-            
+
             # Print sorted by contribution
             sorted_contribs = sorted(avg_contributions.items(), key=lambda x: x[1], reverse=True)
             for feature, value in sorted_contribs:
