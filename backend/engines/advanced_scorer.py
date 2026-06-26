@@ -185,18 +185,3 @@ class AdvancedScorer:
             score += 0.15
         
         return min(score, 1.0)
-    
-    def score_evaluation_experience(
-        self,
-        candidate_raw: Dict[str, Any]
-    ) -> float:
-        """Alias for score_evaluation_framework for consistency"""
-        return self.score_evaluation_framework(candidate_raw)
-    
-    def score_product_mindset(
-        self,
-        candidate_raw: Dict[str, Any],
-        parsed_profile: ParsedProfile
-    ) -> float:
-        """Alias for score_startup_product_mindset for consistency"""
-        return self.score_startup_product_mindset(candidate_raw, parsed_profile)

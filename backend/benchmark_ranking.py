@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from engines.candidate_profile_parser import CandidateProfileParser
 from engines.feature_scorer import FeatureScorer
 from engines.advanced_scorer import AdvancedScorer
-from engines.embedding_retrieval import BM25Retriever, EmbeddingRetriever
+from engines.embedding_retrieval import BM25Retriever
 
 
 class BenchmarkingEngine:
@@ -28,7 +28,6 @@ class BenchmarkingEngine:
         self.feature_scorer = FeatureScorer(self.parser)
         self.advanced_scorer = AdvancedScorer(self.parser)
         self.bm25_retriever = BM25Retriever()
-        self.embedding_retriever = EmbeddingRetriever()
     
     def run_benchmark(
         self,
@@ -37,47 +36,38 @@ class BenchmarkingEngine:
         sample_size: int = 1000,
         top_k: int = 100
     ) -> Dict[str, any]:
-        """Run benchmark comparing 3 approaches"""
+        """Run BM25 benchmark (EmbeddingRetriever deprecated, use EmbeddingPrecomputer via OptimizedRankingEngine)"""
         
         print("\n" + "="*70)
-        print("RANKING APPROACH BENCHMARK")
+        print("BM25 RETRIEVAL BENCHMARK")
         print("="*70)
         print(f"Sample Size: {sample_size}")
         print(f"Top K: {top_k}")
+        print("\nNote: Embeddings-based approaches now use EmbeddingPrecomputer in OptimizedRankingEngine")
         
         # Load sample candidates
-        print(f"\n[1/4] Loading sample from {jsonl_path}...")
+        print(f"\n[1/3] Loading sample from {jsonl_path}...")
         candidates = self._load_sample(jsonl_path, sample_size)
         print(f"  Loaded {len(candidates)} candidates")
         
         # Build indices
-        print(f"\n[2/4] Building retrieval indices...")
+        print(f"\n[2/3] Building BM25 index...")
         t0 = datetime.now()
         self.bm25_retriever.build_index(candidates)
         bm25_time = (datetime.now() - t0).total_seconds()
         
-        t0 = datetime.now()
-        embeddings, ids = self.embedding_retriever.build_index(candidates)
-        faiss_time = (datetime.now() - t0).total_seconds()
-        
         print(f"  BM25 index: {bm25_time:.2f}s")
-        print(f"  Embeddings+FAISS: {faiss_time:.2f}s")
         
-        # Run 3 approaches
-        print(f"\n[3/4] Running 3 ranking approaches...")
+        # Run BM25 approach only
+        print(f"\n[3/3] Running BM25 retrieval...")
         
         results = {
             'bm25_only': self._rank_bm25_only(candidates, jd_text, top_k),
-            'embeddings_only': self._rank_embeddings_only(candidates, jd_text, top_k),
-            'hybrid': self._rank_hybrid(candidates, jd_text, top_k)
         }
         
-        # Analyze results
-        print(f"\n[4/4] Analyzing results...")
-        analysis = self._analyze_results(results, top_k)
-        
         # Print summary
-        self._print_summary(results, analysis)
+        self._print_summary(results, {})
+        
         
         return {
             'results': results,
@@ -117,101 +107,23 @@ class BenchmarkingEngine:
         print(f"  BM25 only: {len(ids)} results in {elapsed:.2f}s")
         return [(id, score) for id, score in zip(ids, scores)]
     
-    def _rank_embeddings_only(
-        self,
-        candidates: List[Dict],
-        jd_text: str,
-        top_k: int
-    ) -> List[Tuple[str, float]]:
-        """Rank using embeddings only"""
-        
-        t0 = datetime.now()
-        ids, scores = self.embedding_retriever.retrieve(jd_text, top_k=top_k)
-        elapsed = (datetime.now() - t0).total_seconds()
-        
-        print(f"  Embeddings only: {len(ids)} results in {elapsed:.2f}s")
-        return [(id, score) for id, score in zip(ids, scores)]
-    
-    def _rank_hybrid(
-        self,
-        candidates: List[Dict],
-        jd_text: str,
-        top_k: int
-    ) -> List[Tuple[str, float]]:
-        """Rank using hybrid (BM25 + embeddings + features)"""
-        
-        t0 = datetime.now()
-        
-        # Stage 1: BM25 → 2000
-        bm25_ids, bm25_scores = self.bm25_retriever.retrieve(jd_text, top_k=2000)
-        
-        # Stage 2: Embeddings from pool → 500
-        embeddings_ids, embeddings_scores = self.embedding_retriever.retrieve(jd_text, top_k=500)
-        embeddings_set = set(embeddings_ids[:500])
-        
-        # Score hybrid pool (combine both stages)
-        pool_ids = set(bm25_ids[:2000]) | embeddings_set
-        pool_ids = list(pool_ids)[:top_k]
-        
-        # Simple hybrid score: average of normalized ranks
-        hybrid_scores = []
-        for id in pool_ids:
-            bm25_rank = bm25_ids.index(id) + 1 if id in bm25_ids else len(bm25_ids) + 1
-            emb_rank = embeddings_ids.index(id) + 1 if id in embeddings_ids else len(embeddings_ids) + 1
-            hybrid_score = 1.0 / (0.5 * (bm25_rank / len(bm25_ids)) + 0.5 * (emb_rank / len(embeddings_ids)))
-            hybrid_scores.append(hybrid_score)
-        
-        elapsed = (datetime.now() - t0).total_seconds()
-        print(f"  Hybrid (BM25+Embeddings): {len(pool_ids)} results in {elapsed:.2f}s")
-        
-        return [(id, score) for id, score in zip(pool_ids, hybrid_scores)]
-    
     def _analyze_results(
         self,
         results: Dict[str, List],
         top_k: int
     ) -> Dict:
-        """Analyze differences between approaches"""
-        
-        # Extract IDs
-        bm25_ids = set(id for id, _ in results['bm25_only'][:top_k])
-        emb_ids = set(id for id, _ in results['embeddings_only'][:top_k])
-        hybrid_ids = set(id for id, _ in results['hybrid'][:top_k])
-        
-        # Compute overlaps
-        overlap_bm25_emb = len(bm25_ids & emb_ids) / top_k
-        overlap_bm25_hybrid = len(bm25_ids & hybrid_ids) / top_k
-        overlap_emb_hybrid = len(emb_ids & hybrid_ids) / top_k
+        """Analyze BM25 results"""
         
         # Score distributions
         bm25_scores = np.array([score for _, score in results['bm25_only'][:top_k]])
-        emb_scores = np.array([score for _, score in results['embeddings_only'][:top_k]])
-        hybrid_scores = np.array([score for _, score in results['hybrid'][:top_k]])
         
         return {
-            'overlap': {
-                'bm25_embeddings': float(overlap_bm25_emb),
-                'bm25_hybrid': float(overlap_bm25_hybrid),
-                'embeddings_hybrid': float(overlap_emb_hybrid)
-            },
             'score_distribution': {
                 'bm25': {
                     'mean': float(np.mean(bm25_scores)),
                     'std': float(np.std(bm25_scores)),
                     'min': float(np.min(bm25_scores)),
                     'max': float(np.max(bm25_scores))
-                },
-                'embeddings': {
-                    'mean': float(np.mean(emb_scores)),
-                    'std': float(np.std(emb_scores)),
-                    'min': float(np.min(emb_scores)),
-                    'max': float(np.max(emb_scores))
-                },
-                'hybrid': {
-                    'mean': float(np.mean(hybrid_scores)),
-                    'std': float(np.std(hybrid_scores)),
-                    'min': float(np.min(hybrid_scores)),
-                    'max': float(np.max(hybrid_scores))
                 }
             }
         }
@@ -223,31 +135,18 @@ class BenchmarkingEngine:
         print("BENCHMARK RESULTS")
         print("="*70)
         
-        print("\n[Overlap Analysis]")
-        print(f"  BM25 vs Embeddings: {analysis['overlap']['bm25_embeddings']*100:.1f}% overlap")
-        print(f"  BM25 vs Hybrid: {analysis['overlap']['bm25_hybrid']*100:.1f}% overlap")
-        print(f"  Embeddings vs Hybrid: {analysis['overlap']['embeddings_hybrid']*100:.1f}% overlap")
-        
         print("\n[Score Distribution]")
-        for approach in ['bm25', 'embeddings', 'hybrid']:
-            dist = analysis['score_distribution'][approach]
-            print(f"\n  {approach.upper()}:")
+        if 'score_distribution' in analysis and 'bm25' in analysis['score_distribution']:
+            dist = analysis['score_distribution']['bm25']
+            print(f"\n  BM25:")
             print(f"    Mean: {dist['mean']:.4f}")
             print(f"    Std:  {dist['std']:.4f}")
             print(f"    Min:  {dist['min']:.4f}")
             print(f"    Max:  {dist['max']:.4f}")
         
-        print("\n[Top 5 Results Comparison]")
+        print("\n[Top 10 Results]")
         print("\n  BM25 Only:")
-        for rank, (id, score) in enumerate(results['bm25_only'][:5], 1):
-            print(f"    {rank}. {id} ({score:.4f})")
-        
-        print("\n  Embeddings Only:")
-        for rank, (id, score) in enumerate(results['embeddings_only'][:5], 1):
-            print(f"    {rank}. {id} ({score:.4f})")
-        
-        print("\n  Hybrid:")
-        for rank, (id, score) in enumerate(results['hybrid'][:5], 1):
+        for rank, (id, score) in enumerate(results['bm25_only'][:10], 1):
             print(f"    {rank}. {id} ({score:.4f})")
         
         print("\n" + "="*70 + "\n")

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent / "backend"))
 
 from engines.candidate_profile_parser import CandidateProfileParser
 from engines.feature_scorer import FeatureScorer
-from engines.embedding_retrieval import EmbeddingRetriever, BM25Retriever
+from engines.embedding_retrieval import BM25Retriever
 from engines.recruiter_jd_parser import RequirementProfile
 
 
@@ -228,41 +228,6 @@ def test_bm25_retriever():
     return True
 
 
-def test_embedding_retriever():
-    print("\n" + "="*60)
-    print("TEST 4: Embedding Retriever (FAISS)")
-    print("="*60)
-    
-    candidates = load_sample_candidates(50)
-    retriever = EmbeddingRetriever()
-    
-    print(f"\nBuilding FAISS index for {len(candidates)} candidates...")
-    try:
-        retriever.load_model()
-        retriever.build_index(candidates, batch_size=10, use_cache=False)
-        print(f"  ✓ FAISS index built successfully")
-        print(f"  ✓ Total vectors: {retriever.index.ntotal}")
-        
-        # Test retrieval
-        query = "Senior AI Engineer with production embeddings retrieval experience in ranking systems"
-        retrieved_ids, scores = retriever.retrieve(query, top_k=10)
-        
-        print(f"\nRetrieving top 10 for query")
-        for cid, score in zip(retrieved_ids[:5], scores[:5]):
-            print(f"  {cid}: {score:.3f}")
-        
-        print(f"  ✓ Retrieved {len(retrieved_ids)} candidates")
-        
-    except Exception as e:
-        print(f"  ✗ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-    
-    print("\n✓ Embedding Retriever Tests Passed")
-    return True
-
-
 def main():
     print("\n" + "="*60)
     print("RANKING ENGINE - COMPONENT TESTS")
@@ -272,7 +237,6 @@ def main():
         test_profile_parser,
         test_feature_scorer,
         test_bm25_retriever,
-        test_embedding_retriever,
     ]
     
     results = []
