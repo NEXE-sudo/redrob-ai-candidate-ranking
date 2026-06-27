@@ -58,6 +58,10 @@ def main():
         "--skip-precompute", action="store_true",
         help="Skip embedding precomputation (use if cache already exists)"
     )
+    parser.add_argument(
+        "--force-precompute", action="store_true",
+        help="Force embedding precomputation even if a compatible cache exists"
+    )
     args = parser.parse_args()
 
     print(f"\nRedrob Ranker — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -93,9 +97,12 @@ def main():
         except Exception:
             return False
 
-    if not args.skip_precompute and not _cache_is_compatible():
+    if not args.skip_precompute and (args.force_precompute or not _cache_is_compatible()):
         if embeddings_file.exists():
-            print("\n[Step 1/2] Existing embeddings cache is incompatible or built with a different model. Recomputing embeddings...")
+            if args.force_precompute:
+                print("\n[Step 1/2] Forcing precomputation. Recomputing embeddings...")
+            else:
+                print("\n[Step 1/2] Existing embeddings cache is incompatible or built with a different model. Recomputing embeddings...")
         else:
             print("\n[Step 1/2] Precomputing embeddings (one-time setup)...")
         precomputer.precompute_embeddings(
