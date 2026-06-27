@@ -626,7 +626,9 @@ class FeatureScorer:
         elif notice <= 30:
             multiplier *= 1.02
         elif notice <= 60:
-            multiplier *= 0.95  # JD: 30+ day notice raises bar; 31-60d mild penalty
+            multiplier *= 0.95
+        elif notice <= 90:
+            multiplier *= 0.90
         elif notice > 90:
             multiplier *= 0.88
 
