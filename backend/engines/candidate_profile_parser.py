@@ -62,10 +62,13 @@ class CandidateProfileParser:
     """Parse and validate candidate profiles"""
     
     # Consulting company keywords
+    # Note: Goldman Sachs and Morgan Stanley removed — they are finance product companies
+    # with significant engineering orgs, not IT consulting firms. Penalizing them as
+    # consulting-only would incorrectly penalize strong quantitative engineers.
     CONSULTING_COMPANIES = {
         'tcs', 'infosys', 'wipro', 'accenture', 'cognizant', 'capgemini',
         'deloitte', 'pwc', 'kpmg', 'ey', 'ernst & young', 'heidrick & struggles',
-        'mckinsey', 'bain', 'bcg', 'goldman sachs', 'morgan stanley'
+        'mckinsey', 'bain', 'bcg'
     }
     
     # Company size mapping
@@ -344,9 +347,12 @@ class CandidateProfileParser:
             industry = role.get('industry', '').lower()
             company_size = role.get('company_size', '')
             
-            # Check if consulting
+            # Check if consulting.
+            # Use word-boundary regex instead of bare substring ('in') to prevent
+            # short tokens like 'ey', 'tcs', 'pwc' from matching inside unrelated
+            # company names (e.g. 'ey' is a substring of 'morgan stanley').
             is_consulting = any(
-                consulting_co in company 
+                re.search(r'\b' + re.escape(consulting_co) + r'\b', company)
                 for consulting_co in self.CONSULTING_COMPANIES
             ) or 'consulting' in industry or 'services' in industry
             

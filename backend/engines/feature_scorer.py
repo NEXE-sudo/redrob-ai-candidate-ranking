@@ -552,10 +552,13 @@ class FeatureScorer:
                 relevant_scores.append(score / 100.0)
 
         if not relevant_scores:
+            # Off-domain assessments (e.g. OpenCV, TTS) should not score highly for retrieval JD.
+            # Reduced multiplier from 0.6 to 0.35 to resist gaming by candidates with
+            # high scores in unrelated skills.
             all_scores = [v / 100.0 for v in assessments.values()]
             if not all_scores:
                 return 0.0
-            return min(sum(all_scores) / len(all_scores) * 0.6, 1.0)
+            return min(sum(all_scores) / len(all_scores) * 0.35, 1.0)
 
         return min(sum(relevant_scores) / len(relevant_scores), 1.0)
 
@@ -622,6 +625,8 @@ class FeatureScorer:
             multiplier *= 1.05
         elif notice <= 30:
             multiplier *= 1.02
+        elif notice <= 60:
+            multiplier *= 0.95  # JD: 30+ day notice raises bar; 31-60d mild penalty
         elif notice > 90:
             multiplier *= 0.88
 
@@ -682,9 +687,10 @@ class FeatureScorer:
             if redrob.get('willing_to_relocate', False):
                 multiplier *= 1.03
 
-        if redrob.get("recruiter_response_rate", 0) >= 0.5:
-            multiplier *= 1.02
-            if requirement_profile and requirement_profile.location_preferences:
+        # Location bonus only — removed duplicate response-rate multiplier that was
+        # double-counting with the >=0.65 bonus already applied above.
+        if requirement_profile and requirement_profile.location_preferences:
+            if redrob.get("recruiter_response_rate", 0) >= 0.5:
                 if any(loc in candidate_location for loc in requirement_profile.location_preferences):
                     multiplier *= 1.03
 
