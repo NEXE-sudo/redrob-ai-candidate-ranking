@@ -86,6 +86,87 @@ python backend/rank.py \
 
 ---
 
+## Core Engines
+
+### 1. Requirement Understanding Engine
+
+**File**: `backend/engines/recruiter_jd_parser.py`
+
+**What it does:**
+- Parses job descriptions and metadata.
+- Extracts must-have and good-to-have skills.
+- Detects role seniority and required experience range.
+- Identifies if hands-on coding or leadership is required.
+
+### 2. Candidate Intelligence Engine
+
+**File**: `backend/engines/candidate_profile_parser.py`
+
+**What it does:**
+- Analyzes candidate career progression and tenure.
+- Extracts explicit skills and normalizes them for matching.
+- Evaluates company history to flag "Consulting-Only" backgrounds vs. "Product Company" experience.
+- Normalizes behavioral signals (e.g., notice period, GitHub activity).
+
+### 3. Embedding & Retrieval Engine
+
+**File**: `backend/engines/optimized_ranking_engine.py`
+
+**What it does:**
+- Uses BM25 for rapid top-K lexical filtering (Top 5,000).
+- Uses Sentence Transformers (`all-mpnet-base-v2`) to generate 768-dim embeddings.
+- Maintains and builds FAISS indices on the fly.
+- Applies semantic similarity search to retrieve the Top 1,000 candidates.
+- Performs Cross-Encoder reranking using `ms-marco-MiniLM-L-12-v2` for precise semantic alignment.
+
+### 4. Ranking Engine (Feature Scoring Hub)
+
+**File**: `backend/engines/feature_scorer.py`
+
+**What it does:**
+- Computes comprehensive, multi-component scoring systems.
+- Calculates a weighted final score.
+- Implements explicit reasoning capture and generates explainability data.
+- Handles behavioral-signal modifiers and explicit penalties for gaming/keyword-stuffing.
+
+**Scoring Strategy:**
+```
+Final Score Components:
+    - title_relevance
+    - skill_trust_score
+    - assessment_score
+    - semantic_similarity
+    - technical_relevance
+    - production_experience
+    - experience_level_fit
+    - education_score
+    - evaluation_framework_score
+    - product_mindset_score
+    - product_fit_score
+    - career_trajectory_score
+```
+*Note: The exact weights are scaled and modified multiplicatively based on behavioral adjustments (e.g. recruiter response rates, notice periods).*
+
+---
+
+## Explainability System
+
+Every candidate ranking generates transparent reasoning, output primarily to `ranking_detailed.json` and summarized in `submission.csv`:
+
+### 1. Score Breakdown
+- Multi-component score logging.
+- Weighted calculation transparency.
+
+### 2. Skill Analysis
+- Matched skills verification.
+- Trust multiplier analysis (penalizes lazy keyword stuffing).
+
+### 3. Career Assessment
+- Experience alignment (seniority vs required range).
+- Company pedigree adjustments (startups/product companies vs pure consulting).
+
+---
+
 ## Outputs
 
 After execution, the results will be placed in the `ranking_output/` directory:
