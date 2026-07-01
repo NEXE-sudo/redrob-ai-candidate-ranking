@@ -78,6 +78,20 @@ results/
 # Keep sample/example outputs if needed
 !sample_submission.csv
 
+# Backend-specific local data and caches
+backend/tests/tmp_test_data/
+backend/models/
+backend/embeddings_cache/
+faiss_index*
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.swp
+*.swo
+*~
+
 # ==================================================
 # Logs
 # ==================================================
@@ -145,4 +159,4 @@ temp/
 # ==================================================
 *.bak
 *.swp
-*.swo   
+*.swo

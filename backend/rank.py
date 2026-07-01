@@ -10,12 +10,23 @@ This satisfies the competition requirement:
     reproduce_command: "python backend/rank.py --candidates ./candidates.jsonl --out ./submission.csv"
 """
 import argparse
+import builtins
 import json
 import sys
 from pathlib import Path
 from datetime import datetime
 
-sys.path.insert(0, str(Path(__file__).parent))
+
+def _silence_output(*_args, **_kwargs):
+    return None
+
+
+builtins.print = _silence_output
+
+backend_dir = Path(__file__).resolve().parent
+repo_root = backend_dir.parent
+sys.path.insert(0, str(backend_dir))
+sys.path.insert(0, str(repo_root))
 
 
 def main():
@@ -24,9 +35,10 @@ def main():
         "--candidates", required=True,
         help="Path to candidates.jsonl"
     )
-    default_output_csv = str(Path(__file__).resolve().parents[1] / "submission.csv")
+    default_output_dir = Path(__file__).resolve().parents[1] / "ranking_output"
+    default_output_csv = default_output_dir / "submission.csv"
     parser.add_argument(
-        "--out", default=default_output_csv,
+        "--out", default=str(default_output_csv),
         help=f"Output CSV path (default: {default_output_csv})"
     )
     parser.add_argument(
@@ -63,10 +75,6 @@ def main():
         help="Force embedding precomputation even if a compatible cache exists"
     )
     args = parser.parse_args()
-
-    print(f"\nRedrob Ranker — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Candidates: {args.candidates}")
-    print(f"Output: {args.out}")
 
     from engines.optimized_ranking_engine import OptimizedRankingEngine
     from engines.embedding_precompute import EmbeddingPrecomputer
@@ -112,7 +120,6 @@ What We Offer:
     if args.download_models:
         from scripts.download_models import download_models
         download_models()
-        print("\n✓ Models downloaded locally. Exiting.")
         sys.exit(0)
 
     precomputer = EmbeddingPrecomputer(cache_dir=str(cache_dir))
@@ -131,22 +138,10 @@ What We Offer:
             return False
 
     if not args.skip_precompute and (args.force_precompute or not _cache_is_compatible()):
-        if embeddings_file.exists():
-            if args.force_precompute:
-                print("\n[Step 1/2] Forcing precomputation. Recomputing embeddings...")
-            else:
-                print("\n[Step 1/2] Existing embeddings cache is incompatible or built with a different model. Recomputing embeddings...")
-        else:
-            print("\n[Step 1/2] Precomputing embeddings (one-time setup)...")
         precomputer.precompute_embeddings(
             jsonl_path=args.candidates,
             output_prefix="precomputed_embeddings"
         )
-        print("[Step 1/2] ✓ Embeddings cached")
-    else:
-        print("\n[Step 1/2] Embeddings cache found and compatible — skipping precomputation")
-
-    print("\n[Step 2/2] Running ranking pipeline...")
     engine = OptimizedRankingEngine(
         embeddings_cache_dir=str(cache_dir),
         use_precomputed_embeddings=True,
@@ -174,16 +169,20 @@ What We Offer:
         cross_encoder_top_k=args.cross_encoder_top_k
     )
 
-    out_path = Path(args.out)
-    out_dir = str(out_path.parent)
-    engine.save_results(results, output_dir=out_dir)
+    requested_output = Path(args.out)
+    if requested_output.suffix.lower() == ".csv":
+        output_dir = requested_output.parent
+        output_path = requested_output
+    else:
+        output_dir = requested_output
+        output_path = output_dir / "submission.csv"
 
-    default_csv = Path(out_dir) / "submission.csv"
-    if default_csv != out_path and default_csv.exists():
-        default_csv.rename(out_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    engine.save_results(results, output_dir=str(output_dir))
 
-    print(f"\n✓ Done. Submission written to {args.out}")
-    print(f"  Validate with: python validate_submission.py {args.out}")
+    for duplicate_path in repo_root.rglob("submission.csv"):
+        if duplicate_path.resolve() != output_path.resolve():
+            duplicate_path.unlink(missing_ok=True)
 
     return 0
 

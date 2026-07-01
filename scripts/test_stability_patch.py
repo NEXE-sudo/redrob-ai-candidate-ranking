@@ -76,9 +76,9 @@ PARSER = CandidateProfileParser()
 
 
 # ===========================================================================
-# Change 1 — No stacking of recruiter_response_rate bonuses
+# No stacking of recruiter_response_rate bonuses.
 # ===========================================================================
-print("\n[Change 1] Recruiter response-rate — no stacking")
+print("\n[Recruiter response-rate] No stacking")
 
 parsed = _minimal_parsed()
 
@@ -118,9 +118,9 @@ check("rate bonus delta ≤ 0.09 (no stacking)", delta_high_mid <= 0.09,
 
 
 # ===========================================================================
-# Change 2 — Goldman Sachs / Morgan Stanley not classified as consulting
+# Goldman Sachs / Morgan Stanley are not classified as consulting.
 # ===========================================================================
-print("\n[Change 2] Consulting company classification")
+print("\n[Consulting company classification]")
 
 # Goldman Sachs — should NOT be consulting
 career_gs = [{"company": "Goldman Sachs", "title": "Software Engineer",
@@ -160,9 +160,9 @@ check("Accenture → IS consulting-only", is_co_acc)
 
 
 # ===========================================================================
-# Change 3 — Assessment fallback: off-domain scores do not inflate
+# Assessment fallback: off-domain scores do not inflate.
 # ===========================================================================
-print("\n[Change 3] Assessment score fallback for off-domain skills")
+print("\n[Assessment score fallback for off-domain skills]")
 
 JD_KEYWORDS = ["faiss", "embeddings", "ranking", "retrieval", "ndcg", "mrr"]
 
@@ -199,9 +199,9 @@ check("mixed uses on-domain score, not fallback", score_mixed > score_offdom,
 
 
 # ===========================================================================
-# Change 4 — Mixed consulting+product career: NOT penalised as consulting-only
+# Mixed consulting+product careers are not penalized as consulting-only.
 # ===========================================================================
-print("\n[Change 4] Mixed consulting+product career handling")
+print("\n[Mixed consulting+product career handling]")
 
 # TCS then Google — is_consulting_only must be False
 career_tcs_google = [
@@ -253,9 +253,9 @@ check("All-TCS career → IS consulting-only", is_co_all_tcs)
 
 
 # ===========================================================================
-# Change 5 — Assessment gaming resistance: domain beats off-domain
+# Assessment gaming resistance: domain beats off-domain
 # ===========================================================================
-print("\n[Change 5] Assessment gaming resistance (ordering)")
+print("\n[Assessment gaming resistance (ordering)]")
 
 # Candidate A: high off-domain scores (computer vision / speech)
 score_a = FS._score_skill_assessments(
@@ -295,9 +295,9 @@ check("Candidate A < 0.40 (off-domain capped)", score_a < 0.40,
 
 
 # ===========================================================================
-# Change 6 — Score integrity: weights unchanged, no explosions
+# Score integrity: weights unchanged, no score explosions
 # ===========================================================================
-print("\n[Change 6] Score integrity checks")
+print("\n[Score integrity checks]")
 
 # Perfect candidate must still score 1.0
 sc_perfect = ScoringComponents(
@@ -340,7 +340,7 @@ raw = {
     'product_mindset_score': 0.03,
     'semantic_similarity': 0.10,
 }
-check("Weights sum to 1.10 (original unchanged)", abs(sum(raw.values()) - 1.10) < 1e-9,
+check("Weights sum to 1.10", abs(sum(raw.values()) - 1.10) < 1e-9,
       f"sum={sum(raw.values()):.4f}")
 
 # Verify scores are within [0, 1]

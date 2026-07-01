@@ -1,5 +1,5 @@
 """
-Advanced Ranking Components - Phase 3+
+Advanced ranking components for candidate scoring.
 New scoring dimensions: career trajectory, product company, retrieval depth, evaluation depth.
 """
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / 'ranking_output'
 
-def check_phase2():
+def check_output_validation():
     print("\n" + "="*50)
     print("PHASE 2: OUTPUT VALIDATION")
     print("="*50)
@@ -48,15 +48,14 @@ def check_phase2():
     else:
         print("PASS: No duplicate candidate IDs.")
         
-    # Check empty reasoning (if any reasoning field is supposed to exist)
-    # The optimized script doesn't generate reasoning, so we skip that here or just check components
+    # Check empty reasoning when the ranking output is expected to include it.
     empty_components = [d for d in data if not d.get('components')]
     if empty_components:
         print("FAIL: Some candidates have missing components/reasoning.")
     else:
         print("PASS: All candidates have components.")
 
-def check_phase3():
+def check_top100_audit():
     print("\n" + "="*50)
     print("PHASE 3: TOP 100 AUDIT")
     print("="*50)
@@ -72,7 +71,7 @@ def check_phase3():
             print(f"  Technical: {c['components']['technical_relevance']:.2f}")
             print(f"  Profile Quality: {c['components']['profile_quality_multiplier']:.2f}")
 
-def check_phase4():
+def check_honeypot_analysis():
     print("\n" + "="*50)
     print("PHASE 4: HONEYPOT ANALYSIS")
     print("="*50)
@@ -106,7 +105,7 @@ def check_phase4():
     print(f"Total Suspicious Profiles in Top 100: {suspicious}")
 
 if __name__ == "__main__":
-    check_phase2()
-    check_phase3()
-    check_phase4()
-    print("\nPhase 8 (Explainability) is manually audited since optimized engine doesn't output LLM text.")
+    check_output_validation()
+    check_top100_audit()
+    check_honeypot_analysis()
+    print("\nExplainability output is reviewed directly from the ranking artifacts.")

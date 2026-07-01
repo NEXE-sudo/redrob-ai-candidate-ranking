@@ -15,18 +15,18 @@ from .recruiter_jd_parser import RequirementProfile
 
 @dataclass
 class ScoringComponents:
-    title_relevance: float          # NEW: decisive anti-stuffer signal
-    skill_trust_score: float        # NEW: endorsement+duration weighted
-    assessment_score: float         # NEW: platform-verified
-    technical_relevance: float      # existing keyword/scale score
-    production_experience: float    # existing
+    title_relevance: float
+    skill_trust_score: float
+    assessment_score: float
+    technical_relevance: float
+    production_experience: float
     profile_quality_multiplier: float
     experience_level_fit: float
-    education_score: float          # NEW
+    education_score: float
     evaluation_framework_score: float
     product_mindset_score: float
     semantic_similarity: float
-    behavioral_multiplier: float    # CHANGED: now a multiplier not additive
+    behavioral_multiplier: float
 
     @property
     def final_score(self) -> float:
@@ -68,8 +68,7 @@ class ScoringComponents:
         sum_weights = sum(weights.values()) or 1.0
         base = base_raw / sum_weights
 
-        # Phase 2: Fix Score Distortion (bounded additive instead of multiplicative)
-        # Shift multipliers to act as +/- bonuses relative to 1.0 baseline
+        # Apply bounded additive adjustments around a 1.0 baseline.
         quality_adjustment = (self.profile_quality_multiplier - 1.0) * 0.10
         behavioral_adjustment = (self.behavioral_multiplier - 1.0) * 0.15
         
@@ -761,7 +760,7 @@ class FeatureScorer:
             0.25 * tier3_sat
         )
         
-        # Phase 4: Keyword Density Penalty (Anti-stuffing)
+        # Apply a keyword-density penalty to reduce stuffing.
         # If the candidate has many keyword hits but very few total words, penalize them.
         total_words = len(all_text.split())
         total_hits = tier1_count + tier2_count + tier3_count
