@@ -53,12 +53,11 @@ else:
                             str(input_path),
                             "--out",
                             str(output_path),
-                            "--skip-precompute",
                         ],
                         cwd=str(ROOT),
                         capture_output=True,
                         text=True,
-                        timeout=900,
+                        timeout=300,
                     )
                 except subprocess.TimeoutExpired:
                     st.error("The ranking run timed out. Please try a smaller file.")

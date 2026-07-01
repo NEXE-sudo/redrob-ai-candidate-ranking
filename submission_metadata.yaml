@@ -32,7 +32,7 @@ sandbox_link: "https://huggingface.co/spaces/NEXE-sudo/redrob-candidate-ranker"
 # candidate sample. See Section 10.5 of submission_spec.md for acceptable
 # platforms (HuggingFace Spaces, Streamlit Cloud, Replit, Colab, Docker, Binder).
 
-reproduce_command: "bash run_full_pipeline.sh '[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl' 'ranking_output'"
+reproduce_command: "bash run_full_pipeline.sh candidates.jsonl ranking_output"
 # The single command that produces submission.csv from candidates.jsonl.
 # Should run end-to-end within 5 minutes on CPU with 16GB RAM and no network.
 
