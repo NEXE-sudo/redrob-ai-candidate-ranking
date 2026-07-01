@@ -70,7 +70,40 @@ def main():
 
     from engines.optimized_ranking_engine import OptimizedRankingEngine
     from engines.embedding_precompute import EmbeddingPrecomputer
-    from run_ranking_optimized import JD_TEXT
+
+    JD_TEXT = """
+Senior AI Engineer - Ranking & Recommendation Systems
+
+We are looking for a Senior AI Engineer with expertise in ranking systems, retrieval augmented generation (RAG), and recommendation algorithms to join our elite team.
+
+Key Responsibilities:
+- Design and implement large-scale ranking engines for ML-based candidate matching
+- Build semantic retrieval systems using embeddings (FAISS, Pinecone, Milvus)
+- Implement learning-to-rank (LTR) models with NDCG/MRR optimization
+- Lead A/B testing and online evaluation frameworks
+- Optimize end-to-end ML pipelines for production systems
+- Mentor junior engineers on ranking architecture and evaluation frameworks
+
+Required Experience:
+- 5-9 years of ML/AI engineering experience
+- Deep expertise in ranking systems, retrieval, and recommendation
+- Production experience with embedding models and vector databases
+- Strong Python skills with ML frameworks (PyTorch, TensorFlow, scikit-learn)
+- Proven track record in shipping ML systems at scale
+- Experience with evaluation metrics (NDCG, MRR, MAP)
+
+Preferred:
+- Startup or product company experience
+- Published research or open-source contributions
+- Experience with LLMs and RAG systems
+- Background in information retrieval and NLP
+
+What We Offer:
+- Early-stage startup environment with equity
+- Work on cutting-edge ranking and retrieval challenges
+- Technical leadership opportunities
+- Competitive compensation and benefits
+"""
 
     cache_dir = Path(args.cache_dir)
     embeddings_file = cache_dir / "precomputed_embeddings_embeddings.npy"

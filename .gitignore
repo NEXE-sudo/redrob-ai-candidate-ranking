@@ -43,6 +43,7 @@ env/
 # Dataset Files (DO NOT COMMIT)
 # ==================================================
 [PUB]*/
+[PUB] India_runs_data_and_ai_challenge/
 *.jsonl
 *.jsonl.gz
 
