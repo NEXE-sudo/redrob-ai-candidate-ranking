@@ -7,17 +7,17 @@
 # ============================================================================
 # Team identity
 # ============================================================================
-team_name: "NEXE-sudo"  # Used in leaderboard and announcements
+team_name: "NEXE-sudo" # Used in leaderboard and announcements
 
 primary_contact:
   name: "Amish Gandhi"
-  email: "amishgandhi316@gmail.com"   # Used for all organizer communication
-  phone: "+91 9880121537"        # Used for top-50 / top-10 outreach
+  email: "amishgandhi316@gmail.com" # Used for all organizer communication
+  phone: "+91 9880121537" # Used for top-50 / top-10 outreach
 
 team_members:
   - name: "Amish Gandhi"
     email: "amishgandhi316@gmail.com"
-    role: "Team Lead"          # Optional, e.g. "Team Lead", "Backend", "Data"
+    role: "Team Lead" # Optional, e.g. "Team Lead", "Backend", "Data"
   # Add more members as needed; solo participants list just one member
 
 # ============================================================================
@@ -40,15 +40,15 @@ reproduce_command: "bash run_full_pipeline.sh"
 # Compute environment
 # ============================================================================
 compute:
-  platform: "MacBook Pro 2019 Intel"                    # Or: "AWS EC2 c5.4xlarge", "Local Linux box", etc.
-  cpu_cores: 8                                  # Number of CPU cores used
-  ram_gb: 16                                    # Available RAM in GB
-  python_version: "3.11.4"                      # python --version
-  os: "macOS 14.2"                              # Or "Ubuntu 22.04 LTS", etc.
-  uses_gpu_for_inference: false                 # Must be false — see compute constraints
-  has_network_during_ranking: false             # Must be false — no API calls during ranking
-  pre_computation_required: true               # true if you pre-compute embeddings or train models offline
-  pre_computation_time_minutes: 0               # Approximate, if applicable
+  platform: "MacBook Pro 2019 Intel" # Or: "AWS EC2 c5.4xlarge", "Local Linux box", etc.
+  cpu_cores: 8 # Number of CPU cores used
+  ram_gb: 16 # Available RAM in GB
+  python_version: "3.11.4" # python --version
+  os: "macOS 14.2" # Or "Ubuntu 22.04 LTS", etc.
+  uses_gpu_for_inference: false # Must be false — see compute constraints
+  has_network_during_ranking: false # Must be false — no API calls during ranking
+  pre_computation_required: true # true if you pre-compute embeddings or train models offline
+  pre_computation_time_minutes: 0 # Approximate, if applicable
 
 # ============================================================================
 # AI tools declaration
@@ -68,7 +68,7 @@ ai_usage_summary: |
 # ============================================================================
 methodology_summary: |
   A robust multi-stage ranking pipeline ensuring high precision and sub-3-minute execution for 100K candidates.
-  
+
   1. BM25 Retrieval: Fast lexical filtering to the top 5,000.
   2. FAISS Semantic Search: Precomputed MPNet embeddings filter down to the top 1,000.
   3. Cross-Encoder Reranking: MS-MARCO MiniLM applies deep relevance scoring.
@@ -79,8 +79,8 @@ methodology_summary: |
 # Declarations
 # ============================================================================
 declarations:
-  read_submission_spec: true        # I have read submission_spec.md in full
-  code_is_original_work: true       # My code is my team's original work (using AI as a tool is fine)
-  no_collusion: true                # I have not coordinated my submission with other teams
-  honeypot_check_done: true         # OPTIONAL — set true if you explicitly checked for honeypots in your ranking
-  reproduction_tested: true         # I have tested that my reproduce_command runs end-to-end
+  read_submission_spec: true # I have read submission_spec.md in full
+  code_is_original_work: true # My code is my team's original work (using AI as a tool is fine)
+  no_collusion: true # I have not coordinated my submission with other teams
+  honeypot_check_done: true # OPTIONAL — set true if you explicitly checked for honeypots in your ranking
+  reproduction_tested: true # I have tested that my reproduce_command runs end-to-end
