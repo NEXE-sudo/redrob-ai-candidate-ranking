@@ -118,6 +118,12 @@ def _infer_embedding_dim(model_name: str, default: int = 384) -> int:
     return _MODEL_EMBEDDING_DIMS.get(model_name, default)
 
 
+def _is_valid_local_model(path: Path) -> bool:
+    """Return True only if the path contains real model weights, not LFS pointers."""
+    weight_files = list(path.glob("*.safetensors")) + list(path.glob("*.bin"))
+    return any(f.stat().st_size > 10 * 1024 * 1024 for f in weight_files)
+
+
 def download_models(models_dir: Path = None):
     """Download required local models for offline use."""
     from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -225,18 +231,18 @@ class EmbeddingPrecomputer:
         print(f"    FAISS idx:  {faiss_index_path} -> {'FOUND' if faiss_index_path.exists() else 'MISSING'}")
     
     def load_model(self):
-        """Load Sentence Transformer model from a local offline cache."""
+        """Load Sentence Transformer model from a local offline cache or Hugging Face Hub."""
         if self.model is None:
             local_path = _resolve_local_model_dir(self.model_name)
-            if local_path.exists():
+            if local_path.exists() and _is_valid_local_model(local_path):
                 print(f"Loading model from local path: {local_path}")
                 self.model = SentenceTransformer(str(local_path), device='cpu')
             else:
-                raise FileNotFoundError(
-                    f"Local embedding model not found at '{local_path}'. "
-                    "Please run 'python backend/scripts/download_models.py' first to "
-                    "download the required model for offline use."
+                print(
+                    f"Local model weights not found or are LFS pointers. Downloading '{self.model_name}' from HuggingFace Hub..."
                 )
+                self.model = SentenceTransformer(self.model_name, device='cpu')
+                print("Model downloaded and loaded successfully.")
             print("Model loaded successfully")
     
     def precompute_embeddings(

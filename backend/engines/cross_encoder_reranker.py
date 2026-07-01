@@ -14,22 +14,27 @@ import os
 _cross_encoder = None
 
 
+def _is_valid_local_model(path: Path) -> bool:
+    weight_files = list(path.glob("*.safetensors")) + list(path.glob("*.bin"))
+    return any(f.stat().st_size > 10 * 1024 * 1024 for f in weight_files)
+
+
 def _get_cross_encoder():
     global _cross_encoder
     if _cross_encoder is None:
         try:
             from sentence_transformers import CrossEncoder
-            # Try local path first (for offline judging environments)
             local_path = Path(__file__).parent.parent / "models" / "cross-encoder-ms-marco-MiniLM-L-12-v2"
-            if local_path.exists():
+            hf_model_id = "cross-encoder/ms-marco-MiniLM-L-12-v2"
+            if local_path.exists() and _is_valid_local_model(local_path):
                 print(f"[CrossEncoder] Loading from local path: {local_path}")
                 _cross_encoder = CrossEncoder(str(local_path), device='cpu')
             else:
-                raise FileNotFoundError(
-                    f"Local CrossEncoder model not found at {local_path}. "
-                    "Offline mode requires the cached CrossEncoder model. "
-                    "Run backend/scripts/download_models.py first."
+                print(
+                    f"[CrossEncoder] Local weights not found or are LFS pointers. Downloading '{hf_model_id}' from HuggingFace Hub..."
                 )
+                _cross_encoder = CrossEncoder(hf_model_id, device='cpu')
+                print("[CrossEncoder] Model downloaded and loaded successfully.")
             print("[CrossEncoder] Model loaded ✓")
         except ImportError:
             raise ImportError(

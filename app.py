@@ -14,6 +14,21 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 sys.path.insert(0, str(BACKEND_DIR))
 
+
+@st.cache_resource(show_spinner="Downloading models on first run — this takes ~2 minutes...")
+def _warm_models():
+    """Download and cache both models at Space startup."""
+    import sys
+
+    sys.path.insert(0, str(ROOT / "backend"))
+    from sentence_transformers import CrossEncoder, SentenceTransformer
+
+    SentenceTransformer("sentence-transformers/all-mpnet-base-v2", device="cpu")
+    CrossEncoder("cross-encoder/ms-marco-MiniLM-L-12-v2", device="cpu")
+
+
+_warm_models()
+
 st.set_page_config(page_title="Redrob Candidate Ranker", page_icon="🤖", layout="wide")
 
 st.title("Redrob Candidate Ranker")
