@@ -40,7 +40,7 @@ done
 
 CANDIDATES="${args[0]:-$DEFAULT_CANDIDATES}"
 OUTPUT_DIR="${args[1]:-$DEFAULT_OUTPUT_DIR}"
-OUTPUT_CSV="$OUTPUT_DIR/submission.csv"
+OUTPUT_CSV="$OUTPUT_DIR/NEXE-sudo.csv"
 
 printf "Running full pipeline from start to finish...\n"
 printf "Candidates: %s\n" "$CANDIDATES"

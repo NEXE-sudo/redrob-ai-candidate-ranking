@@ -57,8 +57,8 @@ else:
                 temp_dir = Path(tempfile.mkdtemp(prefix="sandbox_", dir=str(temp_root)))
                 input_path = temp_dir / f"{uuid.uuid4().hex}.jsonl"
                 input_path.write_text(raw_text, encoding="utf-8")
-                output_path = OUTPUT_DIR / "submission.csv"
-                xlsx_path = OUTPUT_DIR / "submission.xlsx"
+                output_path = OUTPUT_DIR / "NEXE-sudo.csv"
+                xlsx_path = OUTPUT_DIR / "NEXE-sudo.xlsx"
 
                 try:
                     result = subprocess.run(
@@ -98,7 +98,7 @@ else:
                         st.download_button(
                             "Download ranked XLSX",
                             data=xlsx_path.read_bytes(),
-                            file_name="submission.xlsx",
+                            file_name="NEXE-sudo.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         )
 

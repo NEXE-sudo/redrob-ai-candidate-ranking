@@ -794,14 +794,14 @@ class OptimizedRankingEngine:
             })
         
         csv_df = pd.DataFrame(csv_data, columns=['candidate_id', 'rank', 'score', 'reasoning'])
-        csv_path = os.path.join(output_dir, 'submission.csv')
+        csv_path = os.path.join(output_dir, 'NEXE-sudo.csv')
         csv_df.to_csv(csv_path, index=False)
         print(f"Saved CSV: {csv_path}")
         print(f"  Rows: {len(csv_df)}")
         print(f"  Unique candidates: {csv_df['candidate_id'].nunique()}")
         print(f"  Unique ranks: {csv_df['rank'].nunique()}")
 
-        xlsx_path = os.path.join(output_dir, 'submission.xlsx')
+        xlsx_path = os.path.join(output_dir, 'NEXE-sudo.xlsx')
         try:
             csv_df.to_excel(xlsx_path, index=False, engine='openpyxl')
             print(f"Saved XLSX: {xlsx_path}")

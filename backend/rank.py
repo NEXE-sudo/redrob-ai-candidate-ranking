@@ -7,7 +7,7 @@ Usage:
     python rank.py --candidates ./candidates.jsonl --out ./submission.csv
 
 This satisfies the competition requirement:
-    reproduce_command: "python backend/rank.py --candidates ./candidates.jsonl --out ./submission.csv"
+    reproduce_command: "python backend/rank.py --candidates ./candidates.jsonl --out ./ranking_output/NEXE-sudo.csv"
 """
 import argparse
 import builtins
@@ -36,7 +36,7 @@ def main():
         help="Path to candidates.jsonl"
     )
     default_output_dir = Path(__file__).resolve().parents[1] / "ranking_output"
-    default_output_csv = default_output_dir / "submission.csv"
+    default_output_csv = default_output_dir / "NEXE-sudo.csv"
     parser.add_argument(
         "--out", default=str(default_output_csv),
         help=f"Output CSV path (default: {default_output_csv})"
@@ -172,17 +172,18 @@ What We Offer:
     requested_output = Path(args.out)
     if requested_output.suffix.lower() == ".csv":
         output_dir = requested_output.parent
-        output_path = requested_output
+        output_path = output_dir / "NEXE-sudo.csv"
     else:
         output_dir = requested_output
-        output_path = output_dir / "submission.csv"
+        output_path = output_dir / "NEXE-sudo.csv"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     engine.save_results(results, output_dir=str(output_dir))
 
     for duplicate_path in repo_root.rglob("submission.csv"):
-        if duplicate_path.resolve() != output_path.resolve():
-            duplicate_path.unlink(missing_ok=True)
+        duplicate_path.unlink(missing_ok=True)
+    for duplicate_path in repo_root.rglob("submission.xlsx"):
+        duplicate_path.unlink(missing_ok=True)
 
     return 0
 

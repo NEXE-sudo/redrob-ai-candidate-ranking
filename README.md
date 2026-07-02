@@ -35,8 +35,8 @@ This repository contains a candidate ranking pipeline for the Redrob challenge. 
 - `run_full_pipeline.sh` — convenience wrapper for running the full dataset end to end.
 - `scripts/` — utility scripts for dataset inspection, comparison, and testing.
 - `[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/` — challenge dataset, candidate schema, sample outputs, and submission metadata template.
-- `ranking_output/` — generated submission CSV and detailed ranking JSON from pipeline runs.
-- `submission.csv`, `submission_metadata.yaml`, and `submission_spec.txt` — submission-oriented files for the challenge.
+- `ranking_output/` — generated ranked output and detailed ranking JSON from pipeline runs.
+- `submission_metadata.yaml` and `submission_spec.txt` — submission-oriented metadata files for the challenge.
 - `test_ranking_components.py` and other test helpers under `backend/tests/` and `scripts/` — verification and regression checks.
 
 ## Running locally

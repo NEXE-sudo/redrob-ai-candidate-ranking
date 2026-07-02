@@ -15,11 +15,11 @@ def check_output_validation():
         print("Error: ranking_output dir not found")
         return False
         
-    csv_path = output_dir / 'submission.csv'
+    csv_path = output_dir / 'NEXE-sudo.csv'
     json_path = output_dir / 'ranking_detailed.json'
     
     if not os.path.exists(csv_path) or not os.path.exists(json_path):
-        print("Error: Missing submission.csv or ranking_detailed.json")
+        print("Error: Missing NEXE-sudo.csv or ranking_detailed.json")
         return False
         
     df = pd.read_csv(csv_path)
