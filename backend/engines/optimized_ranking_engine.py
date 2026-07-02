@@ -800,7 +800,14 @@ class OptimizedRankingEngine:
         print(f"  Rows: {len(csv_df)}")
         print(f"  Unique candidates: {csv_df['candidate_id'].nunique()}")
         print(f"  Unique ranks: {csv_df['rank'].nunique()}")
-        
+
+        xlsx_path = os.path.join(output_dir, 'submission.xlsx')
+        try:
+            csv_df.to_excel(xlsx_path, index=False, engine='openpyxl')
+            print(f"Saved XLSX: {xlsx_path}")
+        except Exception as exc:
+            print(f"Failed to save XLSX: {exc}")
+
         # JSON
         json_path = os.path.join(output_dir, 'ranking_detailed.json')
         with open(json_path, 'w') as f:

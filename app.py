@@ -58,6 +58,7 @@ else:
                 input_path = temp_dir / f"{uuid.uuid4().hex}.jsonl"
                 input_path.write_text(raw_text, encoding="utf-8")
                 output_path = OUTPUT_DIR / "submission.csv"
+                xlsx_path = OUTPUT_DIR / "submission.xlsx"
 
                 try:
                     result = subprocess.run(
@@ -84,21 +85,21 @@ else:
                 if result.returncode != 0:
                     st.error("Ranking failed. See the terminal output below for details.")
                     st.code(result.stderr or result.stdout)
-                elif not output_path.exists():
-                    st.error("The ranking completed but no CSV was produced.")
+                elif not xlsx_path.exists():
+                    st.error("The ranking completed but no XLSX file was produced.")
                 else:
                     try:
-                        df = pd.read_csv(output_path)
+                        df = pd.read_excel(xlsx_path)
                     except Exception as exc:
-                        st.error(f"The generated CSV could not be read: {exc}")
+                        st.error(f"The generated XLSX could not be read: {exc}")
                     else:
                         st.success("Ranking completed successfully.")
                         st.dataframe(df, use_container_width=True)
                         st.download_button(
-                            "Download ranked CSV",
-                            data=output_path.read_bytes(),
-                            file_name="submission.csv",
-                            mime="text/csv",
+                            "Download ranked XLSX",
+                            data=xlsx_path.read_bytes(),
+                            file_name="submission.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         )
 
                         if result.stdout:
